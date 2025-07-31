@@ -1,6 +1,6 @@
 import os
 import json
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from rich.panel import Panel
 from rich.table import Table
 from rich.layout import Layout
@@ -150,22 +150,28 @@ def create_recommendation_panel(model_size_mb: float, n_layers: int, best_gpu_la
 
 def analyze_gguf_file(
     filepath: str, 
-    config: VRAMConfig = DEFAULT_CONFIG
+    config: VRAMConfig = DEFAULT_CONFIG,
+    vram_override: Optional[int] = None,
+    ram_override: Optional[int] = None
 ) -> Dict[str, Any]:
     """Analyze a GGUF file and return structured results"""
     model_name = os.path.basename(filepath)
     
     # Step 1: Get GPU VRAM
-    available_vram = get_gpu_memory()
+    available_vram = vram_override if vram_override else get_gpu_memory()
     
     # Step 1.5: Get system RAM 
-    total_ram, available_ram = get_system_memory()
+    if ram_override:
+        total_ram = ram_override
+        available_ram = int(ram_override * 0.8)  # Assume 80% available
+    else:
+        total_ram, available_ram = get_system_memory()
     
     # Step 2: Analyze model size
     model_size_mb = estimate_model_size_mb(filepath)
     
     # Step 3: Read metadata
-    metadata = read_gguf_metadata(filepath)
+    metadata, warnings = read_gguf_metadata(filepath)
     
     # Extract layer count
     n_layers = 32  # Default estimate
@@ -254,12 +260,14 @@ def analyze_gguf_file(
 def process_gguf_file(
     filepath: str, 
     config: VRAMConfig = DEFAULT_CONFIG,
-    json_output: bool = False
+    json_output: bool = False,
+    vram_override: Optional[int] = None,
+    ram_override: Optional[int] = None
 ) -> None:
     """Process a single GGUF file and display analysis"""
     if json_output:
         # JSON output mode - no Rich UI
-        analysis_result = analyze_gguf_file(filepath, config)
+        analysis_result = analyze_gguf_file(filepath, config, vram_override, ram_override)
         print(json.dumps(analysis_result, indent=2))
         return
     
@@ -284,7 +292,7 @@ def process_gguf_file(
     console.print("[bold blue]Calculating optimal settings...[/bold blue]")
     
     # Get analysis results
-    analysis_result = analyze_gguf_file(filepath, config)
+    analysis_result = analyze_gguf_file(filepath, config, vram_override, ram_override)
     
     # Display model info
     model = analysis_result["model"]

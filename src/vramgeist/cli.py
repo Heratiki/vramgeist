@@ -101,6 +101,18 @@ Examples:
         help="Enable verbose output"
     )
     
+    parser.add_argument(
+        "--vram-mb",
+        type=int,
+        help="Override GPU VRAM detection with manual value in MB"
+    )
+    
+    parser.add_argument(
+        "--ram-mb", 
+        type=int,
+        help="Override RAM detection with manual value in MB"
+    )
+    
     return parser
 
 
@@ -121,7 +133,7 @@ def main() -> None:
             if not path.exists():
                 console.print(f"[red]Error: File '{path}' not found[/red]")
                 continue
-            process_gguf_file(str(path), config, args.json)
+            process_gguf_file(str(path), config, args.json, args.vram_mb, args.ram_mb)
             total_files_processed += 1
 
         elif path.is_dir():
@@ -138,7 +150,7 @@ def main() -> None:
                 ))
 
             for gguf_file in sorted(gguf_files):
-                process_gguf_file(str(gguf_file), config, args.json)
+                process_gguf_file(str(gguf_file), config, args.json, args.vram_mb, args.ram_mb)
                 total_files_processed += 1
 
         else:
@@ -156,7 +168,7 @@ def main() -> None:
 
                 for gguf_file in sorted(gguf_matches):
                     if os.path.exists(gguf_file):
-                        process_gguf_file(gguf_file, config, args.json)
+                        process_gguf_file(gguf_file, config, args.json, args.vram_mb, args.ram_mb)
                         total_files_processed += 1
             else:
                 console.print(f"[red]Error: '{path}' is not a valid GGUF file, directory, or pattern[/red]")

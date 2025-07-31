@@ -1,0 +1,17 @@
+[project]
+name = "vramgeist"
+version = "0.1.0"
+description = "Calculate maximum safe context length for GGUF models based on available VRAM"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "psutil>=7.0.0",
+    "rich>=14.1.0",
+]
+
+[project.scripts]
+vramgeist = "vramgeist.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

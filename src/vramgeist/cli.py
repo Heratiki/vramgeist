@@ -1,63 +1,127 @@
 from pathlib import Path
 import os
 import sys
+import argparse
+import json
 from rich.console import Console
 from rich.panel import Panel
 from rich import box
 from rich.text import Text
 from rich.align import Align
 
-# Temporary imports from monolith until functions are extracted to modules
-# After extraction, replace with: from .hw import get_gpu_memory, get_system_memory, etc.
-from vramgeist import (
-    get_gpu_memory,
-    get_system_memory,
-    estimate_model_size_mb,
-    read_gguf_metadata,
-    calculate_max_context,
-    calculate_vram_usage,
-    calculate_ram_usage,
-)
+# Import from modular architecture
+from .ui import process_gguf_file
+from .config import VRAMConfig
 
 console = Console(force_terminal=True, width=120)
 
 
-def process_gguf_file(filepath: str) -> None:
-    """Shim: delegate to existing vramgeist.process_gguf_file during transition."""
-    # Import locally to avoid circular import once we move functionality out
-    from vramgeist import process_gguf_file as _process
-    _process(filepath)
 
-
-def _print_usage_and_exit() -> None:
-    console.print(Panel(
-        "[bold blue]Usage:[/bold blue] [cyan]vramgeist <path_to_gguf_file_or_folder>[/cyan]\n\n"
-        "[bold magenta]Examples:[/bold magenta]\n"
-        "[dim]-[/dim] [green]vramgeist model.gguf[/green]\n"
-        "[dim]-[/dim] [green]vramgeist /path/to/models/[/green]\n"
-        "[dim]-[/dim] [green]vramgeist *.gguf[/green]",
-        title="[bold bright_magenta]VRAMGEIST - GGUF VRAM Calculator[/bold bright_magenta]",
-        style="bright_blue",
-        box=box.DOUBLE
-    ))
-    sys.exit(1)
+def create_parser() -> argparse.ArgumentParser:
+    """Create the argument parser with all CLI options"""
+    parser = argparse.ArgumentParser(
+        description="VRAMGEIST - GGUF VRAM Calculator",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  vramgeist model.gguf
+  vramgeist /path/to/models/
+  vramgeist *.gguf
+  vramgeist model.gguf --json
+  vramgeist model.gguf --hidden-size 5120 --vram-safety 0.85
+        """
+    )
+    
+    parser.add_argument(
+        "paths",
+        nargs="+",
+        help="Path(s) to GGUF file(s), directory, or glob pattern"
+    )
+    
+    # Configuration options
+    parser.add_argument(
+        "--profile",
+        choices=["default", "conservative", "aggressive"],  
+        default="default",
+        help="Predefined parameter profile (default: default)"
+    )
+    
+    parser.add_argument(
+        "--hidden-size",
+        type=int,
+        default=4096,
+        help="Hidden size for context calculation (default: 4096)"
+    )
+    
+    parser.add_argument(
+        "--bytes-per-element", 
+        type=int,
+        default=2,
+        help="Bytes per element (default: 2 for fp16)"
+    )
+    
+    parser.add_argument(
+        "--vram-overhead",
+        type=int,
+        default=500,
+        help="VRAM overhead in MB (default: 500)"
+    )
+    
+    parser.add_argument(
+        "--ram-overhead",
+        type=int,
+        default=1000,
+        help="RAM overhead in MB (default: 1000)"
+    )
+    
+    parser.add_argument(
+        "--vram-safety",
+        type=float,
+        default=0.9,
+        help="VRAM safety margin (default: 0.9)"
+    )
+    
+    parser.add_argument(
+        "--ram-safety",
+        type=float,
+        default=0.8,
+        help="RAM safety margin (default: 0.8)"
+    )
+    
+    # Output options
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output results as JSON instead of Rich UI"
+    )
+    
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Enable verbose output"
+    )
+    
+    return parser
 
 
 def main() -> None:
-    # Maintain current CLI UX exactly
-    if len(sys.argv) < 2:
-        _print_usage_and_exit()
-
+    parser = create_parser()
+    args = parser.parse_args()
+    
+    # Create configuration from profile and CLI args
+    config = VRAMConfig.from_profile(args.profile)
+    config = config.update_from_args(args)
+    
     total_files_processed = 0
 
-    for arg in sys.argv[1:]:
+    for arg in args.paths:
         path = Path(arg)
 
         if path.is_file() and path.suffix.lower() == ".gguf":
             if not path.exists():
-                console.print(f"[red]❌ Error: File '{path}' not found[/red]")
+                console.print(f"[red]Error: File '{path}' not found[/red]")
                 continue
-            process_gguf_file(str(path))
+            process_gguf_file(str(path), config, args.json)
             total_files_processed += 1
 
         elif path.is_dir():
@@ -66,14 +130,15 @@ def main() -> None:
                 console.print(f"[yellow]No GGUF files found in directory: {path}[/yellow]")
                 continue
 
-            console.print(Panel(
-                f"[bold blue]📂 Found {len(gguf_files)} GGUF files in:[/bold blue] [cyan]{path}[/cyan]",
-                style="blue",
-                box=box.ROUNDED
-            ))
+            if not args.json:
+                console.print(Panel(
+                    f"[bold blue]Found {len(gguf_files)} GGUF files in:[/bold blue] [cyan]{path}[/cyan]",
+                    style="blue",
+                    box=box.ROUNDED
+                ))
 
             for gguf_file in sorted(gguf_files):
-                process_gguf_file(str(gguf_file))
+                process_gguf_file(str(gguf_file), config, args.json)
                 total_files_processed += 1
 
         else:
@@ -82,21 +147,21 @@ def main() -> None:
             gguf_matches = [f for f in matches if f.lower().endswith(".gguf")]
 
             if gguf_matches:
-                if len(gguf_matches) > 1:
+                if len(gguf_matches) > 1 and not args.json:
                     console.print(Panel(
-                        f"[bold blue]🔍 Found {len(gguf_matches)} GGUF files matching pattern:[/bold blue] [cyan]{path}[/cyan]",
+                        f"[bold blue]Found {len(gguf_matches)} GGUF files matching pattern:[/bold blue] [cyan]{path}[/cyan]",
                         style="blue",
                         box=box.ROUNDED
                     ))
 
                 for gguf_file in sorted(gguf_matches):
                     if os.path.exists(gguf_file):
-                        process_gguf_file(gguf_file)
+                        process_gguf_file(gguf_file, config, args.json)
                         total_files_processed += 1
             else:
-                console.print(f"[red]❌ Error: '{path}' is not a valid GGUF file, directory, or pattern[/red]")
+                console.print(f"[red]Error: '{path}' is not a valid GGUF file, directory, or pattern[/red]")
 
-    if total_files_processed > 0:
+    if total_files_processed > 0 and not args.json:
         console.print(Panel(
             f"[bold green]Analysis complete![/bold green]\n"
             f"[bold blue]Total files processed:[/bold blue] [cyan]{total_files_processed}[/cyan]",

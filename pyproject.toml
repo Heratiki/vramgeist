@@ -12,6 +12,11 @@ dependencies = [
 [project.scripts]
 vramgeist = "vramgeist.cli:main"
 
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0.0",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

@@ -5,7 +5,8 @@
       "Bash(uv add:*)",
       "Bash(dir:*)",
       "Bash(uv run:*)",
-      "Bash(mkdir:*)"
+      "Bash(mkdir:*)",
+      "Bash(uv sync:*)"
     ],
     "deny": []
   }

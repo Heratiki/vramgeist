@@ -13,15 +13,24 @@ VRAMGeist is a Python command-line tool that calculates maximum safe context len
 # Install dependencies
 uv sync
 
-# Run the application
+# Run the application (multiple methods)
 uv run vramgeist <path_to_gguf_file_or_folder>
+uv run -m vramgeist
+python -m vramgeist
 
 # Install in development mode
 uv pip install -e .
+
+# Run tests
+uv run pytest
+uv run pytest tests/
 ```
 
 ### Usage Examples
 ```bash
+# Interactive file browser (when no args provided)
+uv run vramgeist
+
 # Analyze single GGUF file
 uv run vramgeist model.gguf
 
@@ -30,17 +39,43 @@ uv run vramgeist /path/to/models/
 
 # Pattern matching
 uv run vramgeist *.gguf
+
+# JSON output for automation
+uv run vramgeist model.gguf --json
+
+# Override hardware detection
+uv run vramgeist model.gguf --vram-mb 24000 --ram-gb 32
+
+# Automation with environment variables
+VRAMGEIST_BROWSE_AUTOPATH="model.gguf" uv run vramgeist
+VRAMGEIST_BROWSE_CANCEL=1 uv run vramgeist
 ```
 
 ## Architecture
 
-### Single-File Application Structure
-The entire application is contained in `vramgeist.py` with a modular function design:
+### Modular Package Structure
+The application is organized as a proper Python package in `src/vramgeist/`:
 
-- **GPU Detection Layer**: Uses `nvidia-smi` to detect available VRAM with fallbacks
-- **GGUF Parser**: Custom binary file parser that reads GGUF headers and metadata
-- **VRAM Calculator**: Implements oobabooga's VRAM estimation formula
-- **Rich UI Layer**: Live-updating terminal interface with progress indicators
+```
+src/vramgeist/
+├── cli.py          # Command-line interface and argument parsing
+├── config.py       # Configuration management and profiles  
+├── hw.py           # Hardware detection (GPU VRAM, system RAM)
+├── gguf.py         # GGUF file parser and metadata extraction
+├── calc.py         # VRAM/RAM calculation algorithms
+├── ui.py           # Rich-based terminal UI and analysis display
+├── file_browser.py # Interactive file browser (prompt_toolkit)
+├── __init__.py     # Package exports
+└── __main__.py     # Module entry point
+```
+
+**Core Layers:**
+- **Hardware Layer** (`hw.py`): Cross-platform GPU detection (NVIDIA, AMD, Intel, Apple Silicon, Windows dxdiag)
+- **File Parser** (`gguf.py`): Binary GGUF file parsing with defensive error handling
+- **Calculation Engine** (`calc.py`): VRAM/RAM usage algorithms and context length optimization
+- **Configuration** (`config.py`): Profiles (default, conservative, aggressive) and parameter management
+- **UI Layer** (`ui.py`): Rich-based terminal interface with live updates and tables
+- **CLI Interface** (`cli.py`): Argument parsing, file discovery, and orchestration
 
 ### Core Algorithm
 ```
@@ -51,25 +86,31 @@ Overhead = ~500MB for llama.cpp operations
 ```
 
 ### Processing Pipeline
-1. GPU VRAM detection via `nvidia-smi`
-2. Model file size calculation
-3. GGUF metadata parsing (layer count extraction)
-4. VRAM usage calculations for multiple GPU layer configurations
-5. Optimization recommendations with safety margins
+1. Cross-platform hardware detection (GPU VRAM, system RAM)
+2. Model file discovery and size calculation
+3. GGUF metadata parsing (layer count, model parameters)
+4. VRAM/RAM usage calculations for multiple GPU layer configurations
+5. Optimization recommendations with configurable safety margins
+6. Results display via Rich UI or JSON output
 
 ## Key Dependencies
 
 - **uv**: Package manager (faster than pip)
-- **rich**: Terminal UI framework for live updates, tables, and styling
-- **Python 3.9+**: Required for modern pathlib and typing features
+- **rich>=14.1.0**: Terminal UI framework for live updates, tables, and styling
+- **psutil>=7.0.0**: Cross-platform system resource detection (RAM, system info)
+- **prompt_toolkit>=3.0**: Interactive file browser with keyboard navigation
+- **pytest>=7.0.0**: Testing framework (dev dependency)
+- **Python 3.10+**: Required for modern pathlib and typing features
 
 ## Input Handling
 
 The application supports multiple input methods:
-- Single GGUF files
-- Directory scanning (finds all `.gguf` files)  
-- Glob pattern matching
-- Multiple arguments in single command
+- **Interactive Mode**: Terminal file browser when no arguments provided
+- **Single GGUF files**: Direct file path analysis
+- **Directory scanning**: Finds all `.gguf` files recursively
+- **Glob pattern matching**: Shell-style pattern expansion
+- **Multiple arguments**: Process multiple files/patterns in single command
+- **Automation Support**: Environment variables for CI/headless operation
 
 ## UI Architecture
 
@@ -99,7 +140,18 @@ Only supports GGUF files. The GGUF parser handles:
 
 ## Error Handling Patterns
 
-- Graceful fallbacks for missing nvidia-smi
-- Default assumptions when metadata unavailable  
-- File existence validation before processing
-- Path resolution for cross-platform compatibility
+- **Hardware Detection Fallbacks**: Graceful degradation when GPU detection fails
+- **Cross-Platform Compatibility**: Multiple GPU detection methods (nvidia-smi, AMD, Intel, dxdiag)
+- **Metadata Parsing**: Default assumptions when GGUF metadata unavailable
+- **File Validation**: Existence and format checking before processing
+- **Path Resolution**: Cross-platform path normalization
+
+## Test Structure
+
+Tests are organized in `tests/` directory:
+- `test_calc.py`: VRAM calculation function tests with known expected values
+- `test_cli_no_args.py`: CLI behavior and environment variable tests
+- `test_gguf.py`: GGUF file parsing tests with edge cases
+- `test_hw.py`: Hardware detection fallback tests
+
+Run tests with: `uv run pytest`

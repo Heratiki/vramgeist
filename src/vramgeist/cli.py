@@ -34,14 +34,14 @@ Examples:
     
     parser.add_argument(
         "paths",
-        nargs="+",
+        nargs="*",
         help="Path(s) to GGUF file(s), directory, or glob pattern"
     )
     
     # Configuration options
     parser.add_argument(
         "--profile",
-        choices=["default", "conservative", "aggressive"],  
+        choices=["default", "conservative", "aggressive"],
         default="default",
         help="Predefined parameter profile (default: default)"
     )
@@ -54,7 +54,7 @@ Examples:
     )
     
     parser.add_argument(
-        "--bytes-per-element", 
+        "--bytes-per-element",
         type=int,
         default=2,
         help="Bytes per element (default: 2 for fp16)"
@@ -108,7 +108,7 @@ Examples:
     )
     
     parser.add_argument(
-        "--ram-mb", 
+        "--ram-mb",
         type=int,
         help="Override RAM detection with manual value in MB"
     )
@@ -116,14 +116,96 @@ Examples:
     return parser
 
 
-def main() -> None:
+def _maybe_env_browse_bypass() -> tuple[int, str | None] | None:
+    """
+    Support non-interactive testing/automation via env vars:
+    - VRAMGEIST_BROWSE_AUTOPATH: if set to a valid path, return (0, absolute path string)
+    - VRAMGEIST_BROWSE_CANCEL="1": simulate cancel, return (130, None)
+    Returns (exit_code, stdout_string_or_None) or None to continue normal flow.
+    """
+    auto = os.environ.get("VRAMGEIST_BROWSE_AUTOPATH")
+    cancel = os.environ.get("VRAMGEIST_BROWSE_CANCEL")
+    if cancel == "1":
+        # Simulate cancel
+        return (130, None)
+    if auto:
+        p = Path(auto).expanduser().resolve()
+        if p.exists():
+            return (0, str(p))
+        else:
+            # Treat nonexistent path as not selectable; fall through to normal flow
+            return None
+    return None
+
+
+def _run_interactive_browser() -> None:
+    """
+    Invoke the interactive file browser from cwd, allowing both files and dirs.
+    Prints the selected absolute path and exits with code 0.
+    If canceled, exits with code 130 and prints nothing.
+    """
+    # Env var bypass is handled centrally in main(); interactive mode should only handle actual UI
+
+    try:
+        from . import file_browser
+    except Exception:
+        # If prompt_toolkit (or module) missing, show friendly message
+        msg = (
+            "Interactive mode requires optional dependency 'prompt_toolkit'.\n"
+            "Install it with: pip install 'prompt_toolkit>=3.0,<4.0'\n"
+            "Alternatively, set VRAMGEIST_BROWSE_AUTOPATH to bypass interactively."
+        )
+        console.print(f"[red]{msg}[/red]")
+        sys.exit(2)
+
+    try:
+        selected = file_browser.browse(start_dir=str(Path.cwd()), select_files=True, select_dirs=True)
+    except file_browser.PromptToolkitMissingError as exc:
+        console.print(f"[red]{exc}[/red]")
+        sys.exit(2)
+
+    if selected is None:
+        # Cancel
+        sys.exit(130)
+    else:
+        print(selected, end="")
+        sys.exit(0)
+
+
+def main() -> int:
+    # If no CLI args provided at all, enter interactive mode (with env bypass)
+    if len(sys.argv) == 1:
+        # allow tests/automation to bypass
+        bypass = _maybe_env_browse_bypass()
+        if bypass is not None:
+            code, out = bypass
+            if out is not None:
+                sys.stdout.write(out)
+                sys.stdout.flush()
+            sys.exit(code)
+        _run_interactive_browser()
+        return 0
+
     parser = create_parser()
+
     args = parser.parse_args()
     
     # Create configuration from profile and CLI args
     config = VRAMConfig.from_profile(args.profile)
     config = config.update_from_args(args)
     
+    # If user invoked but provided zero paths after options (e.g. just flags), use interactive browser
+    if not args.paths:
+        bypass = _maybe_env_browse_bypass()
+        if bypass is not None:
+            code, out = bypass
+            if out is not None:
+                sys.stdout.write(out)
+                sys.stdout.flush()
+            sys.exit(code)
+        _run_interactive_browser()
+        return 0
+
     total_files_processed = 0
 
     for arg in args.paths:
@@ -181,3 +263,8 @@ def main() -> None:
             style="bright_green",
             box=box.DOUBLE
         ))
+
+
+# Top-level guard for proper exit code and output handling
+if __name__ == "__main__":
+    sys.exit(main())

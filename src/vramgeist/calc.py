@@ -1,4 +1,4 @@
-from typing import Tuple, Union, Optional
+from typing import Tuple, Optional
 from .config import VRAMConfig, DEFAULT_CONFIG
 
 

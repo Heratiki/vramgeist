@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Iterable
+from typing import Iterable, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..state import TUIState
 
 # Lazy import textual components inside functions/classes to avoid hard dependency at import time.
 # This module defines MainScreen with minimal rendering logic.
@@ -14,7 +16,6 @@ class MainScreen:
     def compose(self):
         from textual.widgets import Header, Footer, Static
         from textual.containers import Vertical
-        from textual.app import ComposeResult
 
         yield Header(show_clock=False, tall=False, name="vramgeist (experimental TUI)")
         body = Vertical(id="body")

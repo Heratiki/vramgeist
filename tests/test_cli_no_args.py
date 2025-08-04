@@ -5,7 +5,6 @@ import sys
 import subprocess
 from pathlib import Path
 
-import pytest
 
 
 def _run_module_entrypoint(env: dict[str, str]) -> tuple[int, str, str]:

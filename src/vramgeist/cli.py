@@ -2,12 +2,9 @@ from pathlib import Path
 import os
 import sys
 import argparse
-import json
 from rich.console import Console
 from rich.panel import Panel
 from rich import box
-from rich.text import Text
-from rich.align import Align
 
 # Import from modular architecture
 from .ui import process_gguf_file

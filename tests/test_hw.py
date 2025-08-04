@@ -1,4 +1,3 @@
-import pytest
 from src.vramgeist.hw import _parse_dxdiag_content
 
 

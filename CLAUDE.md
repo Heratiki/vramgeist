@@ -13,13 +13,19 @@ VRAMGeist is a Python command-line tool that calculates maximum safe context len
 # Install dependencies
 uv sync
 
+# Install the package
+uv pip install .
+
+# Install in development mode
+uv pip install -e .
+
+# Install with test dependencies
+uv pip install --group test
+
 # Run the application (multiple methods)
 uv run vramgeist <path_to_gguf_file_or_folder>
 uv run -m vramgeist
 python -m vramgeist
-
-# Install in development mode
-uv pip install -e .
 
 # Run tests
 uv run pytest

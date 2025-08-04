@@ -1,4 +1,3 @@
-import pytest
 from src.vramgeist.calc import (
     calculate_vram_usage,
     calculate_ram_usage,
@@ -24,7 +23,7 @@ class TestVRAMCalculations:
         
         # Should be model + context + overhead
         expected_context = (2048 * 4096 * 2 * 2) / (1024 * 1024)  # ~32MB
-        expected_total = 7000 + expected_context + 500  # ~7532MB
+        _ = 7000 + expected_context + 500  # expected_total ~7532MB
         
         assert result > 7500
         assert result < 7600
@@ -43,7 +42,7 @@ class TestVRAMCalculations:
         # Should use half the model + context + overhead
         expected_model = 7000 * 0.5  # 3500MB
         expected_context = (2048 * 4096 * 2 * 2) / (1024 * 1024)  # ~32MB
-        expected_total = expected_model + expected_context + 500  # ~4032MB
+        _ = expected_model + expected_context + 500  # expected_total ~4032MB
         
         assert result > 4000
         assert result < 4100
@@ -62,7 +61,7 @@ class TestVRAMCalculations:
         # Should use full model + context + overhead
         expected_model = 7000  # Full model on CPU
         expected_context = (2048 * 4096 * 2 * 2) / (1024 * 1024)  # ~32MB  
-        expected_total = expected_model + expected_context + 1000  # ~8032MB
+        _ = expected_model + expected_context + 1000  # expected_total ~8032MB
         
         assert result > 8000
         assert result < 8100

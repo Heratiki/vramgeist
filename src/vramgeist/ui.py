@@ -283,7 +283,6 @@ def process_gguf_file(
         return
     
     # Rich UI mode
-    model_name = os.path.basename(filepath)
     
     # Show header
     console.print(Panel(

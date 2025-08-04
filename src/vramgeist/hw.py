@@ -3,7 +3,7 @@ import subprocess
 import tempfile
 import os
 import re
-from typing import Tuple, Optional, List
+from typing import Tuple, List
 from rich.console import Console
 
 console = Console(force_terminal=True, width=120)
@@ -54,7 +54,7 @@ def _detect_nvidia_gpu(timeout: float, policy: str) -> int:
         if result.returncode != 0:
             return 0
 
-        lines = [l.strip() for l in result.stdout.splitlines() if l.strip()]
+        lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
         if not lines:
             return 0
 
@@ -133,7 +133,7 @@ def _detect_intel_gpu(timeout: float, policy: str) -> int:
                 estimated_vram = min(total_ram // 4, 4096)  # Cap at 4GB
                 console.print(f"[green]Detected Intel GPU: estimated {estimated_vram} MB shared VRAM[/green]")
                 return estimated_vram
-            except:
+            except Exception:
                 pass
                 
     except (FileNotFoundError, subprocess.TimeoutExpired):
@@ -169,7 +169,7 @@ def _detect_apple_gpu(timeout: float, policy: str) -> int:
                         estimated_vram = int(total_ram * 0.7)  # 70% available to GPU
                         console.print(f"[green]Detected Apple Silicon GPU: {estimated_vram} MB unified memory[/green]")
                         return estimated_vram
-                    except:
+                    except Exception:
                         pass
                         
     except (FileNotFoundError, subprocess.TimeoutExpired):
@@ -249,7 +249,7 @@ def _detect_dxdiag_gpu(timeout: float, policy: str) -> int:
                             if mb > 256:
                                 tier_a_or_b_present = True
                                 break
-                        except:
+                        except Exception:
                             continue
                 if tier_a_or_b_present:
                     break

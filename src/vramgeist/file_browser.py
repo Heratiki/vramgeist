@@ -189,7 +189,7 @@ def _process_folder_with_vramgeist(directory: Path) -> List[str]:
 def _render_title(cwd: Path, show_hidden: bool) -> str:
     hidden = "[hidden: on]" if show_hidden else "[hidden: off]"
     # Breadcrumbs for current path
-    breadcrumbs = f"Browsing: {cwd}" if cwd != Path.home() else f"Browsing: ~"
+    breadcrumbs = f"Browsing: {cwd}" if cwd != Path.home() else "Browsing: ~"
     return (
         f"{breadcrumbs}  {hidden}\n"
         "[↑/↓] Move  [PgUp/PgDn] Jump  [Enter] Select/Open  [P] Process w/VRAMGeist  [Backspace/←] Up Dir  [Home] Home  [.] Toggle Hidden  [q/ESC] Cancel"

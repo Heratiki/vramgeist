@@ -1,4 +1,3 @@
-import pytest
 import tempfile
 import struct
 import os

@@ -43,7 +43,6 @@ class VramgeistAppBase:
     def _make_textual_app_class(self):
         App, ComposeResult, Header, Footer, Static, Vertical, events = _lazy_textual_imports()
         # import screen after textual is available
-        from .views.screen_main import MainScreen  # lazy
 
         state = self.state
         analyze_fn = self.analyze_fn
@@ -112,7 +111,7 @@ class VramgeistAppBase:
                 for line in self._lines():
                     self._body.mount(Static(line, expand=False))
 
-            async def on_key(self, event: events.Key) -> None:  # minimal navigation
+            async def on_key(self, event) -> None:  # minimal navigation
                 if event.key in ("j", "down"):
                     self._state.select_next()
                     self._refresh_list()

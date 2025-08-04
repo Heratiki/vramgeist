@@ -30,8 +30,8 @@ def read_gguf_metadata(filepath: str, max_kv: int = 1000, max_key_len: int = 102
                 warnings.append("Invalid magic header, not a GGUF file")
                 return None, warnings
 
-            version = struct.unpack("<I", read_exact(f, 4))[0]
-            tensor_count = struct.unpack("<Q", read_exact(f, 8))[0]
+            _ = struct.unpack("<I", read_exact(f, 4))[0]  # version (unused)
+            _ = struct.unpack("<Q", read_exact(f, 8))[0]  # tensor_count (unused)
             metadata_kv_count = struct.unpack("<Q", read_exact(f, 8))[0]
 
             if metadata_kv_count > max_kv:

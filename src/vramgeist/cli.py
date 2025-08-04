@@ -112,6 +112,12 @@ Examples:
         type=int,
         help="Override RAM detection with manual value in MB"
     )
+    # Experimental TUI flag (non-breaking; lazy import when used)
+    parser.add_argument(
+        "--experimental-tui",
+        action="store_true",
+        help=argparse.SUPPRESS,  # keep hidden for now
+    )
     
     return parser
 
@@ -190,6 +196,9 @@ def main() -> int:
 
     args = parser.parse_args()
     
+    # JSON mode should bypass TUI completely
+    json_mode = bool(getattr(args, "json", False))
+
     # Create configuration from profile and CLI args
     config = VRAMConfig.from_profile(args.profile)
     config = config.update_from_args(args)
@@ -205,6 +214,52 @@ def main() -> int:
             sys.exit(code)
         _run_interactive_browser()
         return 0
+
+    # Handle experimental TUI path only when:
+    # - --experimental-tui is provided
+    # - Not in --json mode
+    # - Files are provided (post-selection we would re-enter here in future phases)
+    use_tui = bool(getattr(args, "experimental_tui", False)) and not json_mode and bool(args.paths)
+
+    if use_tui:
+        try:
+            # Lazy import to avoid hard dependency unless used
+            from .tui.options import TUIOptions
+            from .tui.app import run_tui
+        except ImportError:
+            # Do not alter legacy behavior; print clear guidance and exit 2
+            sys.stderr.write("Textual TUI not installed. Install with: pip install vramgeist[tui]\n")
+            sys.stderr.flush()
+            sys.exit(2)
+
+        # Convert provided args.paths into Path objects filtered to .gguf files, expanding directories/patterns similar to legacy
+        target_paths: list[Path] = []
+        for arg in args.paths:
+            p = Path(arg)
+            if p.is_file() and p.suffix.lower() == ".gguf":
+                if p.exists():
+                    target_paths.append(p)
+            elif p.is_dir():
+                target_paths.extend(sorted(p.glob("*.gguf")))
+            else:
+                from glob import glob
+                for m in sorted(glob(str(p))):
+                    mp = Path(m)
+                    if mp.is_file() and mp.suffix.lower() == ".gguf" and mp.exists():
+                        target_paths.append(mp)
+
+        if not target_paths:
+            # Fall back to legacy error messages for invalid inputs
+            # Re-run legacy loop below to keep user feedback identical
+            use_tui = False
+        else:
+            # Build minimal options; future flags could map here
+            options = TUIOptions()
+            try:
+                rc = run_tui(target_paths, options)
+            except KeyboardInterrupt:
+                sys.exit(130)
+            sys.exit(rc)
 
     total_files_processed = 0
 

@@ -21,6 +21,17 @@ from .config import VRAMConfig, DEFAULT_CONFIG
 console = Console(force_terminal=True, width=120)
 
 
+def analyze_gguf_file(path: "os.PathLike[str] | str") -> Dict[str, Any]:
+    """
+    Minimal analysis function for TUI background processing.
+    Delegates to the existing analyze_gguf_file API using defaults.
+    Returns the same dict structure as the legacy function below but
+    only requires a path argument.
+    """
+    # Import within function body to avoid circular definitions
+    return analyze_gguf_file_with_config(str(path), DEFAULT_CONFIG, None, None)
+
+
 def create_analysis_layout(model_name: str, status: str = "Initializing...") -> Layout:
     """Create the main analysis layout"""
     layout = Layout()
@@ -148,8 +159,8 @@ def create_recommendation_panel(model_size_mb: float, n_layers: int, best_gpu_la
     )
 
 
-def analyze_gguf_file(
-    filepath: str, 
+def analyze_gguf_file_with_config(
+    filepath: str,
     config: VRAMConfig = DEFAULT_CONFIG,
     vram_override: Optional[int] = None,
     ram_override: Optional[int] = None
@@ -258,7 +269,7 @@ def analyze_gguf_file(
 
 
 def process_gguf_file(
-    filepath: str, 
+    filepath: str,
     config: VRAMConfig = DEFAULT_CONFIG,
     json_output: bool = False,
     vram_override: Optional[int] = None,
@@ -267,7 +278,7 @@ def process_gguf_file(
     """Process a single GGUF file and display analysis"""
     if json_output:
         # JSON output mode - no Rich UI
-        analysis_result = analyze_gguf_file(filepath, config, vram_override, ram_override)
+        analysis_result = analyze_gguf_file_with_config(filepath, config, vram_override, ram_override)
         print(json.dumps(analysis_result, indent=2))
         return
     

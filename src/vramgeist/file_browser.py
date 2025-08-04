@@ -83,8 +83,10 @@ def _process_file_with_vramgeist(filepath: Path) -> List[str]:
         lines.append("")
         
         # Model info
+        model_size = analysis.get('model_size_mb', 'Unknown')
+        model_size_str = f"{model_size:.1f} MB" if isinstance(model_size, (int, float)) else str(model_size)
         lines.append("Model Information:")
-        lines.append(f"  Size: {analysis.get('model_size_mb', 'Unknown'):.1f} MB")
+        lines.append(f"  Size: {model_size_str}")
         lines.append(f"  Layers: {analysis.get('layer_count', 'Unknown')}")
         lines.append("")
         
@@ -93,16 +95,32 @@ def _process_file_with_vramgeist(filepath: Path) -> List[str]:
             results = analysis['analysis_results']
             lines.append("Optimal Configuration:")
             lines.append(f"  GPU Layers: {results.get('best_gpu_layers', 'Unknown')}")
-            lines.append(f"  Max Context: {results.get('max_context', 'Unknown'):,}")
-            lines.append(f"  VRAM Usage: {results.get('vram_usage_mb', 'Unknown'):.1f} MB")
-            lines.append(f"  RAM Usage: {results.get('ram_usage_mb', 'Unknown'):.1f} MB")
+            
+            max_context = results.get('max_context', 'Unknown')
+            max_context_str = f"{max_context:,}" if isinstance(max_context, (int, float)) else str(max_context)
+            lines.append(f"  Max Context: {max_context_str}")
+            
+            vram_usage = results.get('vram_usage_mb', 'Unknown')
+            vram_usage_str = f"{vram_usage:.1f} MB" if isinstance(vram_usage, (int, float)) else str(vram_usage)
+            lines.append(f"  VRAM Usage: {vram_usage_str}")
+            
+            ram_usage = results.get('ram_usage_mb', 'Unknown')
+            ram_usage_str = f"{ram_usage:.1f} MB" if isinstance(ram_usage, (int, float)) else str(ram_usage)
+            lines.append(f"  RAM Usage: {ram_usage_str}")
             lines.append("")
             
             # Show multiple configurations if available
             if 'configurations' in results:
                 lines.append("Available Configurations:")
                 for config in results['configurations'][:5]:  # Show top 5
-                    lines.append(f"  Layers: {config['gpu_layers']}, Context: {config['max_context']:,}, VRAM: {config['vram_usage']:.0f}MB")
+                    gpu_layers = config.get('gpu_layers', 'N/A')
+                    max_context = config.get('max_context', 'N/A')
+                    vram_usage = config.get('vram_usage', 'N/A')
+                    
+                    max_context_str = f"{max_context:,}" if isinstance(max_context, (int, float)) else str(max_context)
+                    vram_usage_str = f"{vram_usage:.0f}MB" if isinstance(vram_usage, (int, float)) else str(vram_usage)
+                    
+                    lines.append(f"  Layers: {gpu_layers}, Context: {max_context_str}, VRAM: {vram_usage_str}")
         
         # Warnings
         if 'warnings' in analysis and analysis['warnings']:
@@ -139,17 +157,22 @@ def _process_folder_with_vramgeist(directory: Path) -> List[str]:
                 analysis = analyze_gguf_file(str(gguf_file), DEFAULT_CONFIG)
                 
                 size_mb = analysis.get('model_size_mb', 0)
+                size_str = f"{size_mb:.1f}MB" if isinstance(size_mb, (int, float)) else str(size_mb)
+                
                 if 'analysis_results' in analysis:
                     results = analysis['analysis_results']
                     gpu_layers = results.get('best_gpu_layers', 'N/A')
                     max_context = results.get('max_context', 'N/A')
                     vram_usage = results.get('vram_usage_mb', 0)
                     
+                    max_context_str = f"{max_context:,}" if isinstance(max_context, (int, float)) else str(max_context)
+                    vram_usage_str = f"{vram_usage:.0f}MB" if isinstance(vram_usage, (int, float)) else str(vram_usage)
+                    
                     lines.append(f"📄 {gguf_file.name}")
-                    lines.append(f"   Size: {size_mb:.1f}MB | Layers: {gpu_layers} | Context: {max_context:,} | VRAM: {vram_usage:.0f}MB")
+                    lines.append(f"   Size: {size_str} | Layers: {gpu_layers} | Context: {max_context_str} | VRAM: {vram_usage_str}")
                 else:
                     lines.append(f"📄 {gguf_file.name}")
-                    lines.append(f"   Size: {size_mb:.1f}MB | Analysis failed")
+                    lines.append(f"   Size: {size_str} | Analysis failed")
                     
             except Exception as e:
                 lines.append(f"📄 {gguf_file.name}")

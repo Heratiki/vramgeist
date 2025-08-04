@@ -200,8 +200,28 @@ def main() -> int:
     config = VRAMConfig.from_profile(args.profile)
     config = config.update_from_args(args)
     
-    # If user invoked but provided zero paths after options (e.g. just flags), use interactive browser
+    # If user invoked but provided zero paths after options (e.g. just flags), check for TUI first
     if not args.paths:
+        # Check if experimental TUI should be used instead of legacy browser
+        experimental_tui_flag = bool(getattr(args, "experimental_tui", False))
+        if experimental_tui_flag and not json_mode:
+            # Use experimental TUI in file browser mode
+            try:
+                from .tui.options import TUIOptions
+                from .tui.app import run_tui
+            except ImportError:
+                sys.stderr.write("Textual TUI not installed. Install with: pip install vramgeist[tui]\n")
+                sys.stderr.flush()
+                sys.exit(2)
+            
+            options = TUIOptions()
+            try:
+                rc = run_tui([], options)  # Empty list indicates file browser mode
+            except KeyboardInterrupt:
+                sys.exit(130)
+            sys.exit(rc)
+        
+        # Fall back to legacy interactive browser
         bypass = _maybe_env_browse_bypass()
         if bypass is not None:
             code, out = bypass
@@ -212,18 +232,18 @@ def main() -> int:
         _run_interactive_browser()
         return 0
 
-    # Handle experimental TUI path only when:
-    # - --experimental-tui is provided
+    # Handle experimental TUI path when:
+    # - --experimental-tui is provided  
     # - Not in --json mode
-    # - Files are provided (post-selection we would re-enter here in future phases)
+    # TUI can work both as file browser (no paths) or direct analysis (with paths)
     experimental_tui_flag = bool(getattr(args, "experimental_tui", False))
     has_paths = bool(args.paths)
     
-    # Debug output
-    if args.verbose or experimental_tui_flag:
+    # Debug output (only in verbose mode)
+    if args.verbose:
         console.print(f"[yellow]Debug: experimental_tui={experimental_tui_flag}, json_mode={json_mode}, has_paths={has_paths}[/yellow]")
     
-    use_tui = experimental_tui_flag and not json_mode and has_paths
+    use_tui = experimental_tui_flag and not json_mode
 
     if use_tui:
         try:
@@ -236,31 +256,39 @@ def main() -> int:
             sys.stderr.flush()
             sys.exit(2)
 
-        # Convert provided args.paths into Path objects filtered to .gguf files, expanding directories/patterns similar to legacy
-        target_paths: list[Path] = []
-        for arg in args.paths:
-            p = Path(arg)
-            if p.is_file() and p.suffix.lower() == ".gguf":
-                if p.exists():
-                    target_paths.append(p)
-            elif p.is_dir():
-                target_paths.extend(sorted(p.glob("*.gguf")))
-            else:
-                from glob import glob
-                for m in sorted(glob(str(p))):
-                    mp = Path(m)
-                    if mp.is_file() and mp.suffix.lower() == ".gguf" and mp.exists():
-                        target_paths.append(mp)
+        # Build minimal options; future flags could map here
+        options = TUIOptions()
+        
+        if has_paths:
+            # Direct analysis mode: convert provided args.paths into Path objects filtered to .gguf files
+            target_paths: list[Path] = []
+            for arg in args.paths:
+                p = Path(arg)
+                if p.is_file() and p.suffix.lower() == ".gguf":
+                    if p.exists():
+                        target_paths.append(p)
+                elif p.is_dir():
+                    target_paths.extend(sorted(p.glob("*.gguf")))
+                else:
+                    from glob import glob
+                    for m in sorted(glob(str(p))):
+                        mp = Path(m)
+                        if mp.is_file() and mp.suffix.lower() == ".gguf" and mp.exists():
+                            target_paths.append(mp)
 
-        if not target_paths:
-            # Fall back to legacy error messages for invalid inputs
-            # Re-run legacy loop below to keep user feedback identical
-            use_tui = False
+            if not target_paths:
+                # Fall back to legacy error messages for invalid inputs
+                use_tui = False
+            else:
+                try:
+                    rc = run_tui(target_paths, options)
+                except KeyboardInterrupt:
+                    sys.exit(130)
+                sys.exit(rc)
         else:
-            # Build minimal options; future flags could map here
-            options = TUIOptions()
+            # File browser mode: let TUI handle file selection
             try:
-                rc = run_tui(target_paths, options)
+                rc = run_tui([], options)  # Empty list indicates file browser mode
             except KeyboardInterrupt:
                 sys.exit(130)
             sys.exit(rc)

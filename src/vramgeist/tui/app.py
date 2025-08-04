@@ -141,6 +141,37 @@ def run_tui(paths: List[Path], options: TUIOptions) -> int:
 
     This must NOT print to stdout. It may raise KeyboardInterrupt which the CLI should map to exit 130.
     """
+    # If no paths provided, use Textual-based file browser mode
+    if not paths:
+        from .file_browser import browse_files
+        
+        # Use the Textual file browser to select files/directories
+        selected = browse_files(start_dir=Path.cwd(), select_files=True, select_dirs=True)
+        
+        if selected is None:
+            # User cancelled
+            return 130
+        
+        # Convert selected path to list of GGUF files
+        selected_path = Path(selected)
+        if selected_path.is_file() and selected_path.suffix.lower() == ".gguf":
+            paths = [selected_path]
+        elif selected_path.is_dir():
+            # Find all GGUF files in directory
+            gguf_files = list(selected_path.glob("*.gguf"))
+            if not gguf_files:
+                import sys
+                sys.stderr.write(f"No GGUF files found in directory: {selected_path}\n")
+                sys.stderr.flush()
+                return 1
+            paths = gguf_files
+        else:
+            import sys
+            sys.stderr.write(f"Selected path is not a GGUF file or directory: {selected_path}\n")
+            sys.stderr.flush()
+            return 1
+
+    # Proceed with analysis using the TUI
     # Lazy import of ui for analysis function to avoid early imports
     from .. import ui as ui_module  # legacy ui remains unchanged
 

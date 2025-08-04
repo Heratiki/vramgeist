@@ -109,12 +109,6 @@ Examples:
         type=int,
         help="Override RAM detection with manual value in MB"
     )
-    # Experimental TUI flag (non-breaking; lazy import when used)
-    parser.add_argument(
-        "--experimental-tui",
-        action="store_true",
-        help=argparse.SUPPRESS,  # keep hidden for now
-    )
     
     return parser
 
@@ -143,35 +137,28 @@ def _maybe_env_browse_bypass() -> tuple[int, str | None] | None:
 
 def _run_interactive_browser() -> None:
     """
-    Invoke the interactive file browser from cwd, allowing both files and dirs.
+    Invoke the Textual-based file browser from cwd, allowing both files and dirs.
     Prints the selected absolute path and exits with code 0.
     If canceled, exits with code 130 and prints nothing.
     """
-    # Env var bypass is handled centrally in main(); interactive mode should only handle actual UI
-
     try:
-        from . import file_browser
-    except Exception:
-        # If prompt_toolkit (or module) missing, show friendly message
+        from .tui.file_browser import browse_files
+    except ImportError:
         msg = (
-            "Interactive mode requires optional dependency 'prompt_toolkit'.\n"
-            "Install it with: pip install 'prompt_toolkit>=3.0,<4.0'\n"
+            "Interactive mode requires Textual TUI dependencies.\n"
+            "Install with: pip install vramgeist[tui]\n"
             "Alternatively, set VRAMGEIST_BROWSE_AUTOPATH to bypass interactively."
         )
         console.print(f"[red]{msg}[/red]")
         sys.exit(2)
 
-    try:
-        selected = file_browser.browse(start_dir=str(Path.cwd()), select_files=True, select_dirs=True)
-    except file_browser.PromptToolkitMissingError as exc:
-        console.print(f"[red]{exc}[/red]")
-        sys.exit(2)
-
+    selected = browse_files(start_dir=Path.cwd(), select_files=True, select_dirs=True)
+    
     if selected is None:
         # Cancel
         sys.exit(130)
     else:
-        print(selected, end="")
+        print(str(selected), end="")
         sys.exit(0)
 
 
@@ -200,28 +187,8 @@ def main() -> int:
     config = VRAMConfig.from_profile(args.profile)
     config = config.update_from_args(args)
     
-    # If user invoked but provided zero paths after options (e.g. just flags), check for TUI first
+    # If user invoked but provided zero paths after options (e.g. just flags), use Textual file browser
     if not args.paths:
-        # Check if experimental TUI should be used instead of legacy browser
-        experimental_tui_flag = bool(getattr(args, "experimental_tui", False))
-        if experimental_tui_flag and not json_mode:
-            # Use experimental TUI in file browser mode
-            try:
-                from .tui.options import TUIOptions
-                from .tui.app import run_tui
-            except ImportError:
-                sys.stderr.write("Textual TUI not installed. Install with: pip install vramgeist[tui]\n")
-                sys.stderr.flush()
-                sys.exit(2)
-            
-            options = TUIOptions()
-            try:
-                rc = run_tui([], options)  # Empty list indicates file browser mode
-            except KeyboardInterrupt:
-                sys.exit(130)
-            sys.exit(rc)
-        
-        # Fall back to legacy interactive browser
         bypass = _maybe_env_browse_bypass()
         if bypass is not None:
             code, out = bypass
@@ -232,66 +199,7 @@ def main() -> int:
         _run_interactive_browser()
         return 0
 
-    # Handle experimental TUI path when:
-    # - --experimental-tui is provided  
-    # - Not in --json mode
-    # TUI can work both as file browser (no paths) or direct analysis (with paths)
-    experimental_tui_flag = bool(getattr(args, "experimental_tui", False))
-    has_paths = bool(args.paths)
-    
-    # Debug output (only in verbose mode)
-    if args.verbose:
-        console.print(f"[yellow]Debug: experimental_tui={experimental_tui_flag}, json_mode={json_mode}, has_paths={has_paths}[/yellow]")
-    
-    use_tui = experimental_tui_flag and not json_mode
-
-    if use_tui:
-        try:
-            # Lazy import to avoid hard dependency unless used
-            from .tui.options import TUIOptions
-            from .tui.app import run_tui
-        except ImportError:
-            # Do not alter legacy behavior; print clear guidance and exit 2
-            sys.stderr.write("Textual TUI not installed. Install with: pip install vramgeist[tui]\n")
-            sys.stderr.flush()
-            sys.exit(2)
-
-        # Build minimal options; future flags could map here
-        options = TUIOptions()
-        
-        if has_paths:
-            # Direct analysis mode: convert provided args.paths into Path objects filtered to .gguf files
-            target_paths: list[Path] = []
-            for arg in args.paths:
-                p = Path(arg)
-                if p.is_file() and p.suffix.lower() == ".gguf":
-                    if p.exists():
-                        target_paths.append(p)
-                elif p.is_dir():
-                    target_paths.extend(sorted(p.glob("*.gguf")))
-                else:
-                    from glob import glob
-                    for m in sorted(glob(str(p))):
-                        mp = Path(m)
-                        if mp.is_file() and mp.suffix.lower() == ".gguf" and mp.exists():
-                            target_paths.append(mp)
-
-            if not target_paths:
-                # Fall back to legacy error messages for invalid inputs
-                use_tui = False
-            else:
-                try:
-                    rc = run_tui(target_paths, options)
-                except KeyboardInterrupt:
-                    sys.exit(130)
-                sys.exit(rc)
-        else:
-            # File browser mode: let TUI handle file selection
-            try:
-                rc = run_tui([], options)  # Empty list indicates file browser mode
-            except KeyboardInterrupt:
-                sys.exit(130)
-            sys.exit(rc)
+    # Use Rich terminal UI for normal analysis processing
 
     total_files_processed = 0
 

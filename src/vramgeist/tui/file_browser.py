@@ -2,128 +2,16 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import List, Optional, Callable, Any
+from typing import List, Optional
 
 from textual.app import App, ComposeResult
+from textual.widgets import Header, Footer, Static
 from textual.containers import Vertical, Horizontal
-from textual.widgets import Header, Footer, ListView, ListItem, Label, Static
-from textual.binding import Binding
-from textual.screen import Screen
 from textual import events
 
 
-class FileBrowserItem:
-    """Represents a file or directory item in the browser."""
-    
-    def __init__(self, path: Path, is_parent: bool = False):
-        self.path = path
-        self.is_parent = is_parent
-        self.is_dir = path.is_dir() if not is_parent else True
-        
-    @property
-    def display_name(self) -> str:
-        if self.is_parent:
-            return "↩ .."
-        elif self.is_dir:
-            return f"📁 {self.path.name}{os.sep}"
-        else:
-            return f"📄 {self.path.name}"
-    
-    @property
-    def sort_key(self) -> tuple:
-        # Sort parent first, then directories, then files (all case-insensitive)
-        if self.is_parent:
-            return (0, "")
-        elif self.is_dir:
-            return (1, self.path.name.lower())
-        else:
-            return (2, self.path.name.lower())
-
-
-class FileBrowserWidget(ListView):
-    """File browser list widget with keyboard navigation."""
-    
-    def __init__(self, current_dir: Path, show_hidden: bool = False):
-        super().__init__()
-        self.current_dir = current_dir.resolve()
-        self.show_hidden = show_hidden
-        self.selected_path: Optional[Path] = None
-        self._items: List[FileBrowserItem] = []
-    
-    def on_mount(self) -> None:
-        """Initialize file listing after widget is mounted."""
-        self._refresh_files()
-    
-    def _refresh_files(self) -> None:
-        """Refresh the file listing for current directory."""
-        self.clear()
-        self._items = []
-        
-        try:
-            # Add parent directory entry (unless at root)
-            if self.current_dir.parent != self.current_dir:
-                self._items.append(FileBrowserItem(self.current_dir.parent, is_parent=True))
-            
-            # Add directory contents
-            for path in self.current_dir.iterdir():
-                # Skip hidden files if not showing them
-                if not self.show_hidden and path.name.startswith('.'):
-                    continue
-                self._items.append(FileBrowserItem(path))
-                
-        except PermissionError:
-            # Handle permission errors gracefully
-            pass
-        
-        # Sort items
-        self._items.sort(key=lambda x: x.sort_key)
-        
-        # Add to ListView if widget is mounted
-        if self.is_attached:
-            for item in self._items:
-                list_item = ListItem(Label(item.display_name))
-                list_item.item_data = item  # Store the FileBrowserItem
-                self.append(list_item)
-    
-    def navigate_to(self, path: Path) -> None:
-        """Navigate to a new directory."""
-        if path.is_dir():
-            self.current_dir = path.resolve()
-            self._refresh_files()
-            self.index = 0  # Reset selection to top
-    
-    def toggle_hidden(self) -> None:
-        """Toggle showing hidden files."""
-        self.show_hidden = not self.show_hidden
-        current_index = self.index
-        self._refresh_files()
-        # Try to maintain selection position
-        if current_index < len(self._items):
-            self.index = current_index
-        else:
-            self.index = max(0, len(self._items) - 1)
-        # Force refresh the display
-        self.refresh()
-    
-    def get_selected_item(self) -> Optional[FileBrowserItem]:
-        """Get the currently selected file browser item."""
-        if 0 <= self.index < len(self._items):
-            return self._items[self.index]
-        return None
-    
-    def select_current(self) -> Optional[Path]:
-        """Select the current item and return its path."""
-        item = self.get_selected_item()
-        if item:
-            if item.is_parent:
-                return item.path  # Parent directory path
-            else:
-                return item.path
-        return None
-
-
-class FileBrowserScreen(Screen):
-    """Full-screen file browser interface."""
+class FileBrowserApp(App):
+    """Simple file browser with direct key handling."""
     
     CSS = """
     .hidden {
@@ -140,202 +28,458 @@ class FileBrowserScreen(Screen):
         padding: 1;
     }
     
-    #metadata_header {
+    #file_header, #metadata_header {
         text-style: bold;
         color: $primary;
-    }
-    
-    #metadata_content {
-        height: 100%;
-        overflow-y: auto;
+        height: 1;
     }
     """
     
-    BINDINGS = [
-        Binding("up,k", "cursor_up", "Move up"),
-        Binding("down,j", "cursor_down", "Move down"),
-        Binding("pageup", "page_up", "Page up"),
-        Binding("pagedown", "page_down", "Page down"),
-        Binding("home", "go_home", "Go home"),
-        Binding("backspace,left", "go_up", "Go up directory"),
-        Binding("enter", "select_or_enter", "Select/Enter"),
-        Binding("f2,space", "select_current", "Select"),
-        Binding("period", "toggle_hidden", "Toggle hidden"),
-        Binding("q,escape", "cancel_or_hide", "Cancel/Hide"),
-    ]
-    
     def __init__(self, start_dir: Path = None, select_files: bool = True, select_dirs: bool = True):
         super().__init__()
-        self.start_dir = start_dir or Path.cwd()
+        self.current_dir = (start_dir or Path.cwd()).resolve()
         self.select_files = select_files
         self.select_dirs = select_dirs
-        self.selected_path: Optional[Path] = None
-        self.cancelled = False
+        self.show_hidden = False
+        self.selected_index = 0
+        self.entries = []
+        self.viewport_top = 0  # First visible item index
+        self.viewport_height = 20  # Number of visible items (will be adjusted based on screen)
         self.show_metadata = False
-        self.metadata_file: Optional[Path] = None
-    
+        self.metadata_content = ""
+        
     def compose(self) -> ComposeResult:
         yield Header(name="VRAMGeist File Browser")
+        yield Static("↑↓/jk: navigate | PgUp/PgDn: scroll | Enter: select/navigate | Space/F2: process | ./h: toggle hidden | Esc: hide panel/quit")
+        self.path_display = Static("")
+        yield self.path_display
+        
         with Horizontal():
+            # Left panel: File browser
             with Vertical(id="file_panel"):
-                self.current_path_label = Static(f"📂 Current Directory: {self._format_path(self.start_dir)}")
-                yield self.current_path_label
-                yield Static("Use ↑↓ to navigate, Enter to show info, F2/Space to select, Q to cancel, . to toggle hidden files")
-                self.file_browser = FileBrowserWidget(self.start_dir)
-                yield self.file_browser
-            # Metadata panel - initially hidden
+                yield Static("[bold]Files[/bold]", id="file_header")
+                self.file_display = Static("")
+                yield self.file_display
+            
+            # Right panel: Metadata/processing results (initially hidden)
             with Vertical(id="metadata_panel", classes="hidden"):
-                yield Static("File Information", id="metadata_header")
-                self.metadata_content = Static("", id="metadata_content")
-                yield self.metadata_content
+                yield Static("[bold]Analysis Results[/bold]", id="metadata_header")
+                self.metadata_display = Static("")
+                yield self.metadata_display
+        
         yield Footer()
     
-    def _format_path(self, path: Path) -> str:
-        """Format path for display, using ~ for home directory."""
+    def on_mount(self) -> None:
+        """Initialize the file browser."""
+        self.refresh_display()
+    
+    def update_viewport(self) -> None:
+        """Update viewport to ensure selected item is visible."""
+        if not self.entries:
+            return
+            
+        # If selection is above viewport, scroll up
+        if self.selected_index < self.viewport_top:
+            self.viewport_top = self.selected_index
+        
+        # If selection is below viewport, scroll down
+        elif self.selected_index >= self.viewport_top + self.viewport_height:
+            self.viewport_top = self.selected_index - self.viewport_height + 1
+        
+        # Ensure viewport doesn't go below 0 or beyond entries
+        self.viewport_top = max(0, min(self.viewport_top, max(0, len(self.entries) - self.viewport_height)))
+    
+    def refresh_display(self) -> None:
+        """Refresh the entire display."""
+        # Update path
+        self.path_display.update(f"📂 {self.current_dir}")
+        
+        # Get directory entries
+        self.entries = []
+        
         try:
-            return str(path).replace(str(Path.home()), "~")
-        except:
-            return str(path)
-    
-    def _update_path_display(self) -> None:
-        """Update the current path display."""
-        self.current_path_label.update(f"📂 Current Directory: {self._format_path(self.file_browser.current_dir)}")
-    
-    def action_cursor_up(self) -> None:
-        """Move cursor up."""
-        self.file_browser.action_cursor_up()
-    
-    def action_cursor_down(self) -> None:
-        """Move cursor down."""
-        self.file_browser.action_cursor_down()
-    
-    def action_page_up(self) -> None:
-        """Move up by 10 items."""
-        for _ in range(10):
-            self.file_browser.action_cursor_up()
-    
-    def action_page_down(self) -> None:
-        """Move down by 10 items."""
-        for _ in range(10):
-            self.file_browser.action_cursor_down()
-    
-    def action_go_home(self) -> None:
-        """Navigate to home directory."""
-        self._hide_metadata_panel()
-        self.file_browser.navigate_to(Path.home())
-        self._update_path_display()
-    
-    def action_go_up(self) -> None:
-        """Navigate up one directory level."""
-        self._hide_metadata_panel()
-        parent = self.file_browser.current_dir.parent
-        if parent != self.file_browser.current_dir:  # Not at root
-            self.file_browser.navigate_to(parent)
-            self._update_path_display()
-    
-    def action_select_or_enter(self) -> None:
-        """Handle Enter key - either navigate into directory or show file info."""
-        item = self.file_browser.get_selected_item()
-        if not item:
-            return
+            # Add parent directory if not at root
+            if self.current_dir.parent != self.current_dir:
+                self.entries.append({
+                    'path': self.current_dir.parent,
+                    'name': '..',
+                    'is_dir': True,
+                    'is_parent': True,
+                    'display': '↩ ..'
+                })
+            
+            # Get all items in directory
+            items = []
+            all_items = list(self.current_dir.iterdir())
+            for item in all_items:
+                # Skip hidden files if not showing them
+                if not self.show_hidden and item.name.startswith('.'):
+                    continue
+                items.append(item)
+            
+            # Sort: directories first, then files
+            items.sort(key=lambda x: (not x.is_dir(), x.name.lower()))
+            
+            # Add to entries
+            for item in items:
+                if item.is_dir():
+                    display = f"📁 {item.name}/"
+                else:
+                    display = f"📄 {item.name}"
+                
+                self.entries.append({
+                    'path': item,
+                    'name': item.name,
+                    'is_dir': item.is_dir(),
+                    'is_parent': False,
+                    'display': display
+                })
+                
+        except PermissionError:
+            self.entries.append({
+                'path': None,
+                'name': 'Permission denied',
+                'is_dir': False,
+                'is_parent': False,
+                'display': '❌ Permission denied'
+            })
         
-        if item.is_parent:
-            # Navigate to parent directory
-            self._hide_metadata_panel()
-            self.file_browser.navigate_to(item.path)
-            self._update_path_display()
-        elif item.is_dir:
-            # Navigate into directory
-            self._hide_metadata_panel()
-            self.file_browser.navigate_to(item.path)
-            self._update_path_display()
+        # Ensure selected index is valid
+        if self.selected_index >= len(self.entries):
+            self.selected_index = max(0, len(self.entries) - 1)
+        elif self.selected_index < 0:
+            self.selected_index = 0
+        
+        # Reset viewport when refreshing directory
+        self.viewport_top = 0
+        self.update_viewport()
+        self.update_file_list()
+    
+    def update_file_list(self) -> None:
+        """Update the file list display with viewport scrolling."""
+        lines = []
+        
+        if not self.entries:
+            lines = ["<empty directory>"]
         else:
-            # For files, show metadata panel
-            self._show_file_metadata(item.path)
-    
-    def action_select_current(self) -> None:
-        """Select current item and exit."""
-        item = self.file_browser.get_selected_item()
-        if not item:
-            return
+            # Get visible entries within viewport
+            viewport_end = min(self.viewport_top + self.viewport_height, len(self.entries))
+            visible_entries = self.entries[self.viewport_top:viewport_end]
+            
+            for i, entry in enumerate(visible_entries):
+                actual_index = self.viewport_top + i
+                if actual_index == self.selected_index:
+                    lines.append(f"[reverse]{entry['display']}[/reverse]")
+                else:
+                    lines.append(entry['display'])
+            
+            # Add scroll indicators if needed
+            if self.viewport_top > 0:
+                lines.insert(0, "[dim]↑ More items above...[/dim]")
+            if viewport_end < len(self.entries):
+                lines.append("[dim]↓ More items below...[/dim]")
         
-        # Check if selection is allowed based on type
-        if item.is_dir and not self.select_dirs:
-            return
-        if not item.is_dir and not self.select_files:
-            return
-        if item.is_parent:
-            return  # Can't select parent directory entry
-        
-        self.selected_path = item.path
-        self.dismiss(self.selected_path)
+        # Add debug info
+        total_items = len(list(self.current_dir.iterdir())) if self.current_dir.exists() else 0
+        visible_items = len(self.entries) - (1 if self.entries and self.entries[0]['is_parent'] else 0)
+        scroll_info = f"[{self.selected_index + 1}/{len(self.entries)}]" if self.entries else ""
+        debug_line = f"[dim]Showing {visible_items}/{total_items} items {scroll_info} (hidden: {'on' if self.show_hidden else 'off'})[/dim]"
+        lines.append(debug_line)
+            
+        self.file_display.update("\n".join(lines))
     
-    def action_toggle_hidden(self) -> None:
-        """Toggle showing hidden files."""
-        self.file_browser.toggle_hidden()
-    
-    def action_cancel_or_hide(self) -> None:
-        """Cancel and exit, or hide metadata panel if showing."""
-        if self.show_metadata:
-            self._hide_metadata_panel()
-        else:
-            self.cancelled = True
-            self.dismiss(None)
-    
-    def _show_file_metadata(self, file_path: Path) -> None:
-        """Show metadata panel for the selected file."""
-        self.metadata_file = file_path
+    def show_metadata_panel(self) -> None:
+        """Show the metadata panel."""
         self.show_metadata = True
-        
-        # Generate metadata content
-        metadata_text = self._generate_file_metadata(file_path)
-        self.metadata_content.update(metadata_text)
-        
-        # Show the metadata panel
         metadata_panel = self.query_one("#metadata_panel")
         metadata_panel.remove_class("hidden")
     
-    def _hide_metadata_panel(self) -> None:
+    def hide_metadata_panel(self) -> None:
         """Hide the metadata panel."""
         self.show_metadata = False
-        self.metadata_file = None
         metadata_panel = self.query_one("#metadata_panel")
         metadata_panel.add_class("hidden")
     
-    def _generate_file_metadata(self, file_path: Path) -> str:
-        """Generate metadata text for a file."""
+    def process_gguf_file(self, file_path: Path) -> None:
+        """Process a single GGUF file and display results."""
         try:
-            stat = file_path.stat()
-            size_mb = stat.st_size / (1024 * 1024)
+            # Import VRAMGeist processing functions
+            from ..ui import analyze_gguf_file
             
-            metadata_lines = [
-                f"📄 {file_path.name}",
-                "",
-                f"Size: {stat.st_size:,} bytes ({size_mb:.2f} MB)",
-                f"Modified: {stat.st_mtime}",
-                f"Type: {file_path.suffix or 'No extension'}",
-                ""
-            ]
+            self.metadata_display.update("[bold yellow]Processing...[/bold yellow]")
+            self.show_metadata_panel()
             
-            # Special handling for GGUF files
-            if file_path.suffix.lower() == '.gguf':
-                metadata_lines.extend([
-                    "🤖 GGUF Model File",
-                    "Press 'P' to analyze with VRAMGeist",
-                    ""
-                ])
+            # Analyze the file (function only takes path argument)
+            result = analyze_gguf_file(str(file_path))
+            
+            # Format the results for display
+            lines = []
+            lines.append(f"[bold cyan]📄 {file_path.name}[/bold cyan]")
+            lines.append("")
+            
+            # Hardware info
+            if 'gpu_vram_mb' in result or 'total_ram_gb' in result:
+                lines.append("[bold]Hardware Detected:[/bold]")
+                if 'gpu_vram_mb' in result:
+                    lines.append(f"  GPU VRAM: {result['gpu_vram_mb']} MB")
+                if 'total_ram_gb' in result:
+                    lines.append(f"  System RAM: {result['total_ram_gb']} GB")
+                lines.append("")
+            
+            # Model info
+            if 'model_size_mb' in result or 'layer_count' in result:
+                lines.append("[bold]Model Information:[/bold]")
+                if 'model_size_mb' in result:
+                    size_mb = result['model_size_mb']
+                    size_str = f"{size_mb:.1f} MB" if isinstance(size_mb, (int, float)) else str(size_mb)
+                    lines.append(f"  Size: {size_str}")
+                if 'layer_count' in result:
+                    lines.append(f"  Layers: {result['layer_count']}")
+                lines.append("")
+            
+            # Analysis results
+            if 'analysis_results' in result:
+                analysis = result['analysis_results']
+                lines.append("[bold]Optimal Configuration:[/bold]")
                 
-                # Try to get basic GGUF info
-                try:
-                    metadata_lines.append("GGUF Analysis:")
-                    metadata_lines.append("(Analysis would go here)")
-                except Exception as e:
-                    metadata_lines.append(f"GGUF analysis failed: {e}")
+                if 'best_gpu_layers' in analysis:
+                    lines.append(f"  GPU Layers: {analysis['best_gpu_layers']}")
+                
+                if 'max_context' in analysis:
+                    max_ctx = analysis['max_context']
+                    ctx_str = f"{max_ctx:,}" if isinstance(max_ctx, (int, float)) else str(max_ctx)
+                    lines.append(f"  Max Context: {ctx_str}")
+                
+                if 'vram_usage_mb' in analysis:
+                    vram = analysis['vram_usage_mb']
+                    vram_str = f"{vram:.1f} MB" if isinstance(vram, (int, float)) else str(vram)
+                    lines.append(f"  VRAM Usage: {vram_str}")
+                
+                if 'ram_usage_mb' in analysis:
+                    ram = analysis['ram_usage_mb']
+                    ram_str = f"{ram:.1f} MB" if isinstance(ram, (int, float)) else str(ram)
+                    lines.append(f"  RAM Usage: {ram_str}")
+                
+                lines.append("")
+                
+                # Show additional configurations if available
+                if 'configurations' in analysis:
+                    configs = analysis['configurations'][:5]  # Show top 5
+                    if configs:
+                        lines.append("[bold]Alternative Configurations:[/bold]")
+                        for config in configs:
+                            gpu_layers = config.get('gpu_layers', 'N/A')
+                            max_ctx = config.get('max_context', 'N/A')
+                            vram_usage = config.get('vram_usage', 'N/A')
+                            
+                            ctx_str = f"{max_ctx:,}" if isinstance(max_ctx, (int, float)) else str(max_ctx)
+                            vram_str = f"{vram_usage:.0f}MB" if isinstance(vram_usage, (int, float)) else str(vram_usage)
+                            
+                            lines.append(f"  Layers: {gpu_layers}, Context: {ctx_str}, VRAM: {vram_str}")
+                        lines.append("")
+                
+            # Warnings
+            if 'warnings' in result and result['warnings']:
+                lines.append("[bold yellow]Warnings:[/bold yellow]")
+                for warning in result['warnings']:
+                    lines.append(f"  ⚠ {warning}")
+                lines.append("")
             
-            return "\n".join(metadata_lines)
+            self.metadata_content = "\n".join(lines)
+            self.metadata_display.update(self.metadata_content)
             
         except Exception as e:
-            return f"Error reading file metadata: {e}"
+            error_msg = f"[bold red]Error processing {file_path.name}:[/bold red]\n{str(e)}"
+            self.metadata_display.update(error_msg)
+            self.show_metadata_panel()
+    
+    def process_directory(self, dir_path: Path) -> None:
+        """Process all GGUF files in a directory and display summary."""
+        try:
+            # Find all GGUF files
+            gguf_files = list(dir_path.glob("*.gguf"))
+            
+            if not gguf_files:
+                self.metadata_display.update(f"[yellow]No GGUF files found in {dir_path.name}[/yellow]")
+                self.show_metadata_panel()
+                return
+            
+            self.metadata_display.update(f"[bold yellow]Processing {len(gguf_files)} GGUF files...[/bold yellow]")
+            self.show_metadata_panel()
+            
+            # Import processing functions
+            from ..ui import analyze_gguf_file
+            
+            lines = []
+            lines.append(f"[bold cyan]📁 {dir_path.name}[/bold cyan]")
+            lines.append(f"Found {len(gguf_files)} GGUF file(s)")
+            lines.append("")
+            
+            # Process each file
+            for gguf_file in sorted(gguf_files):
+                try:
+                    result = analyze_gguf_file(str(gguf_file))
+                    
+                    size_mb = result.get('model_size_mb', 0)
+                    size_str = f"{size_mb:.1f}MB" if isinstance(size_mb, (int, float)) else str(size_mb)
+                    
+                    lines.append(f"[bold]📄 {gguf_file.name}[/bold]")
+                    lines.append(f"  Size: {size_str}")
+                    
+                    if 'analysis_results' in result:
+                        analysis = result['analysis_results']
+                        gpu_layers = analysis.get('best_gpu_layers', 'N/A')
+                        max_context = analysis.get('max_context', 'N/A')
+                        vram_usage = analysis.get('vram_usage_mb', 0)
+                        
+                        ctx_str = f"{max_context:,}" if isinstance(max_context, (int, float)) else str(max_context)
+                        vram_str = f"{vram_usage:.0f}MB" if isinstance(vram_usage, (int, float)) else str(vram_usage)
+                        
+                        lines.append(f"  Optimal: {gpu_layers} layers, {ctx_str} context, {vram_str} VRAM")
+                    else:
+                        lines.append("  Analysis failed")
+                    
+                    lines.append("")
+                    
+                except Exception as e:
+                    lines.append(f"[bold]📄 {gguf_file.name}[/bold]")
+                    lines.append(f"  [red]Error: {str(e)}[/red]")
+                    lines.append("")
+            
+            self.metadata_content = "\n".join(lines)
+            self.metadata_display.update(self.metadata_content)
+            
+        except Exception as e:
+            error_msg = f"[bold red]Error processing directory:[/bold red]\n{str(e)}"
+            self.metadata_display.update(error_msg)
+            self.show_metadata_panel()
+    
+    async def on_key(self, event: events.Key) -> None:
+        """Handle key presses directly."""
+        key = event.key
+        
+        # Debug: show what key was pressed in the path display temporarily
+        self.path_display.update(f"📂 {self.current_dir} [Key pressed: '{key}']")
+        
+        # Navigation
+        if key in ("up", "k"):
+            if self.selected_index > 0:
+                self.selected_index -= 1
+                self.update_viewport()
+                self.update_file_list()
+        
+        elif key in ("down", "j"):
+            if self.selected_index < len(self.entries) - 1:
+                self.selected_index += 1
+                self.update_viewport()
+                self.update_file_list()
+        
+        elif key == "pageup":
+            # Move up by viewport height
+            self.selected_index = max(0, self.selected_index - self.viewport_height)
+            self.update_viewport()
+            self.update_file_list()
+        
+        elif key == "pagedown":
+            # Move down by viewport height
+            self.selected_index = min(len(self.entries) - 1, self.selected_index + self.viewport_height)
+            self.update_viewport()
+            self.update_file_list()
+        
+        elif key == "home":
+            self.current_dir = Path.home()
+            self.selected_index = 0
+            self.refresh_display()
+        
+        elif key in ("left", "backspace"):
+            parent = self.current_dir.parent
+            if parent != self.current_dir:
+                self.current_dir = parent
+                self.selected_index = 0
+                self.refresh_display()
+        
+        # Toggle hidden files - try multiple key variations
+        elif key in ("period", ".", "full_stop", "h"):
+            self.show_hidden = not self.show_hidden
+            # Reset selection to prevent index out of bounds
+            old_selected = self.selected_index
+            self.selected_index = 0
+            self.refresh_display()
+            # Show feedback with count
+            try:
+                hidden_count = sum(1 for item in self.current_dir.iterdir() if item.name.startswith('.'))
+                status = f"on ({hidden_count} hidden)" if self.show_hidden else "off"
+                self.path_display.update(f"📂 {self.current_dir} [Hidden files: {status}]")
+            except:
+                status = "on" if self.show_hidden else "off"
+                self.path_display.update(f"📂 {self.current_dir} [Hidden files: {status}]")
+        
+        # Enter - select/navigate (traditional file browser behavior)
+        elif key == "enter":
+            if not self.entries or self.selected_index >= len(self.entries):
+                return
+                
+            entry = self.entries[self.selected_index]
+            if entry['path'] is None:  # Permission denied
+                return
+            
+            if entry['is_parent']:
+                # Navigate to parent directory
+                self.current_dir = entry['path'].resolve()
+                self.selected_index = 0
+                self.hide_metadata_panel()
+                self.refresh_display()
+            elif entry['is_dir']:
+                # Navigate into directory
+                self.current_dir = entry['path'].resolve()
+                self.selected_index = 0
+                self.hide_metadata_panel()
+                self.refresh_display()
+            else:
+                # Select file
+                if self.select_files:
+                    self.exit(entry['path'])
+        
+        # Space/F2 - process GGUF files/directories
+        elif key in ("space", "f2"):
+            if not self.entries or self.selected_index >= len(self.entries):
+                return
+                
+            entry = self.entries[self.selected_index]
+            if entry['path'] is None or entry['is_parent']:
+                return
+            
+            if entry['is_dir']:
+                # Check if directory contains GGUF files for processing
+                dir_path = entry['path']
+                gguf_files = list(dir_path.glob("*.gguf"))
+                
+                if gguf_files:
+                    # Process directory with GGUF files
+                    self.process_directory(dir_path)
+                else:
+                    # No GGUF files, treat as regular directory selection
+                    if self.select_dirs:
+                        self.exit(dir_path)
+            else:
+                # Check if it's a GGUF file for processing
+                file_path = entry['path']
+                if file_path.suffix.lower() == '.gguf':
+                    # Process GGUF file
+                    self.process_gguf_file(file_path)
+                else:
+                    # Regular file selection
+                    if self.select_files:
+                        self.exit(file_path)
+        
+        # Quit or hide metadata panel
+        elif key in ("q", "escape"):
+            if self.show_metadata:
+                # Hide metadata panel first
+                self.hide_metadata_panel()
+            else:
+                # Exit application
+                self.exit(None)
 
 
 def browse_files(start_dir: Path = None, select_files: bool = True, select_dirs: bool = True) -> Optional[Path]:
@@ -350,20 +494,5 @@ def browse_files(start_dir: Path = None, select_files: bool = True, select_dirs:
     Returns:
         Selected Path object, or None if cancelled
     """
-    class FileBrowserApp(App):
-        def __init__(self):
-            super().__init__()
-            self.result: Optional[Path] = None
-            
-        def on_mount(self) -> None:
-            screen = FileBrowserScreen(start_dir, select_files, select_dirs)
-            
-            def on_screen_result(result):
-                self.result = result
-                self.exit(result)
-                
-            self.push_screen(screen, callback=on_screen_result)
-    
-    app = FileBrowserApp()
-    app.run()
-    return app.result
+    app = FileBrowserApp(start_dir, select_files, select_dirs)
+    return app.run()

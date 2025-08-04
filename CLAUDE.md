@@ -70,7 +70,7 @@ src/vramgeist/
 ├── gguf.py         # GGUF file parser and metadata extraction
 ├── calc.py         # VRAM/RAM calculation algorithms
 ├── ui.py           # Rich-based terminal UI and analysis display
-├── file_browser.py # Interactive file browser (prompt_toolkit)
+├── tui/            # Textual-based terminal UI components
 ├── __init__.py     # Package exports
 └── __main__.py     # Module entry point
 ```
@@ -104,7 +104,7 @@ Overhead = ~500MB for llama.cpp operations
 - **uv**: Package manager (faster than pip)
 - **rich>=14.1.0**: Terminal UI framework for live updates, tables, and styling
 - **psutil>=7.0.0**: Cross-platform system resource detection (RAM, system info)
-- **prompt_toolkit>=3.0**: Interactive file browser with keyboard navigation
+- **textual>=5.2.0**: Modern terminal user interface framework for interactive file browser
 - **pytest>=7.0.0**: Testing framework (dev dependency)
 - **Python 3.10+**: Required for modern pathlib and typing features
 

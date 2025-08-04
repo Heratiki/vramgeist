@@ -49,6 +49,24 @@ class VramgeistAppBase:
         max_workers = self.max_workers
 
         class VramgeistApp(App):
+            def _reload_files(self, directory: Path | None = None) -> None:
+                # Helper to reload files and directories, respecting show_hidden, and add '..' entry
+                dir_path = directory or getattr(self._state, "current_dir", None) or Path.cwd()
+                if not hasattr(self._state, "show_hidden"):
+                    self._state.show_hidden = False
+                entries = []
+                # Add parent directory entry unless at root
+                if dir_path != dir_path.parent:
+                    entries.append("..")
+                # List directories first, then files
+                for p in sorted(dir_path.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
+                    if not self._state.show_hidden and p.name.startswith("."):
+                        continue
+                    entries.append(p)
+                self._state.files = entries
+                if hasattr(self._state, "current_dir"):
+                    self._state.current_dir = dir_path
+                self._refresh_list()
             CSS = """
             #body {
                 overflow: auto;
@@ -72,8 +90,11 @@ class VramgeistAppBase:
                 yield Footer()
 
             def _lines(self) -> Iterable[str]:
-                for path in self._state.files:
-                    yield self._state.get_status_line(path)
+                for entry in self._state.files:
+                    if entry == "..":
+                        yield "[..]"
+                    else:
+                        yield self._state.get_status_line(entry)
 
             async def on_mount(self) -> None:
                 # start background analysis
@@ -111,15 +132,59 @@ class VramgeistAppBase:
                 for line in self._lines():
                     self._body.mount(Static(line, expand=False))
 
-            async def on_key(self, event) -> None:  # minimal navigation
+            async def on_key(self, event) -> None:
+                # Navigation: j/k/up/down
                 if event.key in ("j", "down"):
                     self._state.select_next()
                     self._refresh_list()
                 elif event.key in ("k", "up"):
                     self._state.select_prev()
                     self._refresh_list()
+                # Quit: q/escape
                 elif event.key in ("q", "escape"):
                     await self.action_quit()
+                # Toggle hidden files: '.' or 'period'
+                elif event.key in (".", "period"):
+                    if not hasattr(self._state, "show_hidden"):
+                        self._state.show_hidden = False
+                    self._state.show_hidden = not self._state.show_hidden
+                    dir_path = getattr(self._state, "current_dir", None) or Path.cwd()
+                    self._reload_files(dir_path)
+                # Process: F2/Space
+                elif event.key in ("f2", "space"):
+                    selected_entry = self._state.get_selected_path() if hasattr(self._state, "get_selected_path") else None
+                    if selected_entry and selected_entry != "..":
+                        loop = asyncio.get_running_loop()
+                        await self._analyze_one(loop, selected_entry)
+                        self._refresh_list()
+                # Parent directory: Backspace/Left
+                elif event.key in ("backspace", "left"):
+                    dir_path = getattr(self._state, "current_dir", None) or Path.cwd()
+                    parent_dir = dir_path.parent if dir_path != dir_path.parent else dir_path
+                    if hasattr(self._state, "current_dir"):
+                        self._state.current_dir = parent_dir
+                    self._reload_files(parent_dir)
+                # Home directory: Home
+                elif event.key == "home":
+                    home_dir = Path.home()
+                    if hasattr(self._state, "current_dir"):
+                        self._state.current_dir = home_dir
+                    self._reload_files(home_dir)
+                # Enter: navigate into directory or parent, process file
+                elif event.key in ("enter",):
+                    selected_entry = self._state.get_selected_path() if hasattr(self._state, "get_selected_path") else None
+                    dir_path = getattr(self._state, "current_dir", None) or Path.cwd()
+                    if selected_entry == "..":
+                        parent_dir = dir_path.parent if dir_path != dir_path.parent else dir_path
+                        self._state.current_dir = parent_dir
+                        self._reload_files(parent_dir)
+                    elif isinstance(selected_entry, Path) and selected_entry.is_dir():
+                        self._state.current_dir = selected_entry
+                        self._reload_files(selected_entry)
+                    elif isinstance(selected_entry, Path) and selected_entry.is_file():
+                        loop = asyncio.get_running_loop()
+                        await self._analyze_one(loop, selected_entry)
+                        self._refresh_list()
 
             async def on_unmount(self) -> None:
                 # Clean up executor

@@ -216,7 +216,14 @@ def main() -> int:
     # - --experimental-tui is provided
     # - Not in --json mode
     # - Files are provided (post-selection we would re-enter here in future phases)
-    use_tui = bool(getattr(args, "experimental_tui", False)) and not json_mode and bool(args.paths)
+    experimental_tui_flag = bool(getattr(args, "experimental_tui", False))
+    has_paths = bool(args.paths)
+    
+    # Debug output
+    if args.verbose or experimental_tui_flag:
+        console.print(f"[yellow]Debug: experimental_tui={experimental_tui_flag}, json_mode={json_mode}, has_paths={has_paths}[/yellow]")
+    
+    use_tui = experimental_tui_flag and not json_mode and has_paths
 
     if use_tui:
         try:

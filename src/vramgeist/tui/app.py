@@ -64,11 +64,11 @@ class VramgeistAppBase:
                 self._tasks: list[asyncio.Task[None]] = []
 
             def compose(self) -> ComposeResult:
-                yield Header(show_clock=False, tall=False, name="vramgeist (experimental TUI)")
-                self._body = Vertical(id="body")  # type: ignore[attr-defined]
-                for line in self._lines():
-                    self._body.mount(Static(line, expand=False))
-                yield self._body
+                yield Header(show_clock=False, name="vramgeist (experimental TUI)")
+                with Vertical(id="body") as body:
+                    for line in self._lines():
+                        yield Static(line, expand=False)
+                self._body = body  # type: ignore[attr-defined]
                 yield Footer()
 
             def _lines(self) -> Iterable[str]:

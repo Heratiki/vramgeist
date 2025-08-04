@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 from typing import List, Optional
 
@@ -40,7 +41,6 @@ class FileBrowserApp(App):
         self.current_dir = (start_dir or Path.cwd()).resolve()
         self.select_files = select_files
         self.select_dirs = select_dirs
-        self.show_hidden = False
         self.selected_index = 0
         self.entries = []
         self.viewport_top = 0  # First visible item index
@@ -48,9 +48,13 @@ class FileBrowserApp(App):
         self.show_metadata = False
         self.metadata_content = ""
         
+        # Load persistent settings
+        self.settings_file = Path.home() / ".vramgeist_settings.json"
+        self.show_hidden = self.load_settings().get("show_hidden", False)
+        
     def compose(self) -> ComposeResult:
         yield Header(name="VRAMGeist File Browser")
-        yield Static("↑↓/jk: navigate | PgUp/PgDn: scroll | Enter: select/navigate | Space/F2: process | ./h: toggle hidden | Esc: hide panel/quit")
+        yield Static("↑↓/jk: navigate | PgUp/PgDn: scroll | Enter: info/navigate | Space/F2: VRAM analysis | ./h: toggle hidden | Esc: hide panel/quit")
         self.path_display = Static("")
         yield self.path_display
         
@@ -72,6 +76,27 @@ class FileBrowserApp(App):
     def on_mount(self) -> None:
         """Initialize the file browser."""
         self.refresh_display()
+    
+    def load_settings(self) -> dict:
+        """Load persistent settings from file."""
+        try:
+            if self.settings_file.exists():
+                with open(self.settings_file, 'r') as f:
+                    return json.load(f)
+        except Exception:
+            pass
+        return {}
+    
+    def save_settings(self) -> None:
+        """Save current settings to file."""
+        try:
+            settings = {
+                "show_hidden": self.show_hidden
+            }
+            with open(self.settings_file, 'w') as f:
+                json.dump(settings, f)
+        except Exception:
+            pass
     
     def update_viewport(self) -> None:
         """Update viewport to ensure selected item is visible."""
@@ -200,96 +225,232 @@ class FileBrowserApp(App):
         metadata_panel = self.query_one("#metadata_panel")
         metadata_panel.add_class("hidden")
     
-    def process_gguf_file(self, file_path: Path) -> None:
-        """Process a single GGUF file and display results."""
+    def show_file_metadata(self, file_path: Path) -> None:
+        """Show file metadata and basic info (not VRAM processing)."""
         try:
-            # Import VRAMGeist processing functions
-            from ..ui import analyze_gguf_file
-            
-            self.metadata_display.update("[bold yellow]Processing...[/bold yellow]")
             self.show_metadata_panel()
             
-            # Analyze the file (function only takes path argument)
-            result = analyze_gguf_file(str(file_path))
-            
-            # Format the results for display
             lines = []
             lines.append(f"[bold cyan]📄 {file_path.name}[/bold cyan]")
             lines.append("")
             
-            # Hardware info
-            if 'gpu_vram_mb' in result or 'total_ram_gb' in result:
-                lines.append("[bold]Hardware Detected:[/bold]")
-                if 'gpu_vram_mb' in result:
-                    lines.append(f"  GPU VRAM: {result['gpu_vram_mb']} MB")
-                if 'total_ram_gb' in result:
-                    lines.append(f"  System RAM: {result['total_ram_gb']} GB")
+            # Basic file info
+            try:
+                stat = file_path.stat()
+                size_mb = stat.st_size / (1024 * 1024)
+                lines.append("[bold]File Information:[/bold]")
+                lines.append(f"  Size: {stat.st_size:,} bytes ({size_mb:.2f} MB)")
+                lines.append(f"  Type: {file_path.suffix or 'No extension'}")
+                lines.append("")
+            except Exception as e:
+                lines.append(f"  [red]Error reading file info: {e}[/red]")
                 lines.append("")
             
-            # Model info
-            if 'model_size_mb' in result or 'layer_count' in result:
-                lines.append("[bold]Model Information:[/bold]")
-                if 'model_size_mb' in result:
-                    size_mb = result['model_size_mb']
-                    size_str = f"{size_mb:.1f} MB" if isinstance(size_mb, (int, float)) else str(size_mb)
-                    lines.append(f"  Size: {size_str}")
-                if 'layer_count' in result:
-                    lines.append(f"  Layers: {result['layer_count']}")
+            # GGUF-specific info
+            if file_path.suffix.lower() == '.gguf':
+                lines.append("[bold yellow]🤖 GGUF Model File[/bold yellow]")
                 lines.append("")
-            
-            # Analysis results
-            if 'analysis_results' in result:
-                analysis = result['analysis_results']
-                lines.append("[bold]Optimal Configuration:[/bold]")
-                
-                if 'best_gpu_layers' in analysis:
-                    lines.append(f"  GPU Layers: {analysis['best_gpu_layers']}")
-                
-                if 'max_context' in analysis:
-                    max_ctx = analysis['max_context']
-                    ctx_str = f"{max_ctx:,}" if isinstance(max_ctx, (int, float)) else str(max_ctx)
-                    lines.append(f"  Max Context: {ctx_str}")
-                
-                if 'vram_usage_mb' in analysis:
-                    vram = analysis['vram_usage_mb']
-                    vram_str = f"{vram:.1f} MB" if isinstance(vram, (int, float)) else str(vram)
-                    lines.append(f"  VRAM Usage: {vram_str}")
-                
-                if 'ram_usage_mb' in analysis:
-                    ram = analysis['ram_usage_mb']
-                    ram_str = f"{ram:.1f} MB" if isinstance(ram, (int, float)) else str(ram)
-                    lines.append(f"  RAM Usage: {ram_str}")
-                
+                lines.append("[dim]Press [bold]Space[/bold] or [bold]F2[/bold] to run VRAM analysis[/dim]")
                 lines.append("")
                 
-                # Show additional configurations if available
-                if 'configurations' in analysis:
-                    configs = analysis['configurations'][:5]  # Show top 5
-                    if configs:
-                        lines.append("[bold]Alternative Configurations:[/bold]")
-                        for config in configs:
-                            gpu_layers = config.get('gpu_layers', 'N/A')
-                            max_ctx = config.get('max_context', 'N/A')
-                            vram_usage = config.get('vram_usage', 'N/A')
-                            
-                            ctx_str = f"{max_ctx:,}" if isinstance(max_ctx, (int, float)) else str(max_ctx)
-                            vram_str = f"{vram_usage:.0f}MB" if isinstance(vram_usage, (int, float)) else str(vram_usage)
-                            
-                            lines.append(f"  Layers: {gpu_layers}, Context: {ctx_str}, VRAM: {vram_str}")
+                # Try to get basic GGUF metadata without full processing
+                try:
+                    from ..gguf import parse_gguf_metadata
+                    metadata = parse_gguf_metadata(str(file_path))
+                    
+                    if metadata:
+                        lines.append("[bold]GGUF Metadata:[/bold]")
+                        if 'model_name' in metadata:
+                            lines.append(f"  Model: {metadata['model_name']}")
+                        if 'layer_count' in metadata:
+                            lines.append(f"  Layers: {metadata['layer_count']}")
+                        if 'context_length' in metadata:
+                            lines.append(f"  Context Length: {metadata['context_length']:,}")
                         lines.append("")
-                
-            # Warnings
-            if 'warnings' in result and result['warnings']:
-                lines.append("[bold yellow]Warnings:[/bold yellow]")
-                for warning in result['warnings']:
-                    lines.append(f"  ⚠ {warning}")
+                        
+                except Exception:
+                    lines.append("[dim]GGUF metadata unavailable[/dim]")
+                    lines.append("")
+            else:
+                lines.append("[dim]Not a GGUF model file[/dim]")
                 lines.append("")
             
             self.metadata_content = "\n".join(lines)
             self.metadata_display.update(self.metadata_content)
             
         except Exception as e:
-            error_msg = f"[bold red]Error processing {file_path.name}:[/bold red]\n{str(e)}"
+            error_msg = f"[bold red]Error reading file metadata:[/bold red]\n{str(e)}"
+            self.metadata_display.update(error_msg)
+            self.show_metadata_panel()
+    
+    def process_gguf_file(self, file_path: Path) -> None:
+        """Process a single GGUF file with full VRAM analysis."""
+        try:
+            # Import VRAMGeist processing functions
+            from ..ui import analyze_gguf_file
+            
+            self.metadata_display.update("[bold yellow]🔄 Running VRAM Analysis...[/bold yellow]\n\n[dim]This may take a moment...[/dim]")
+            self.show_metadata_panel()
+            
+            # Analyze the file (function only takes path argument)
+            result = analyze_gguf_file(str(file_path))
+            
+            # Format the comprehensive results
+            lines = []
+            lines.append(f"[bold cyan]🤖 {file_path.name}[/bold cyan]")
+            lines.append("")
+            
+            # Hardware Detection Results
+            lines.append("[bold green]💻 Hardware Detected:[/bold green]")
+            system_info = result.get('system', {})
+            available_vram = system_info.get('vram_available_mb', 'Unknown')
+            total_ram_mb = system_info.get('ram_total_mb', 'Unknown')
+            available_ram = system_info.get('ram_available_mb', 'Unknown')
+            
+            # Convert total RAM from MB to GB for display
+            if isinstance(total_ram_mb, (int, float)):
+                total_ram = total_ram_mb / 1024
+            else:
+                total_ram = total_ram_mb
+            
+            if isinstance(available_vram, (int, float)):
+                lines.append(f"  GPU VRAM: {available_vram:,} MB")
+            else:
+                lines.append(f"  GPU VRAM: {available_vram}")
+                
+            if isinstance(total_ram, (int, float)):
+                lines.append(f"  System RAM: {total_ram:.1f} GB")
+            else:
+                lines.append(f"  System RAM: {total_ram}")
+                
+            if isinstance(available_ram, (int, float)):
+                lines.append(f"  Available RAM: {available_ram:,} MB")
+            lines.append("")
+            
+            # Model Analysis Results
+            lines.append("[bold blue]📊 Model Analysis:[/bold blue]")
+            model_info = result.get('model', {})
+            model_size = model_info.get('size_mb', 'Unknown')
+            layer_count = model_info.get('layers', 'Unknown')
+            
+            if isinstance(model_size, (int, float)):
+                lines.append(f"  File Size: {model_size:.1f} MB ({model_size/1024:.2f} GB)")
+            else:
+                lines.append(f"  File Size: {model_size}")
+                
+            lines.append(f"  Layer Count: {layer_count}")
+            lines.append("")
+            
+            # Optimal Configuration
+            lines.append("[bold magenta]🎯 Recommended Configuration:[/bold magenta]")
+            recommendation = result.get('recommendation', {})
+            best_gpu_layers = recommendation.get('gpu_layers', 'N/A')
+            best_context = recommendation.get('max_context', 'N/A')
+            best_vram_usage = recommendation.get('expected_vram_mb', 'N/A')
+            best_ram_usage = recommendation.get('expected_ram_mb', 'N/A')
+            
+            lines.append(f"  🔧 GPU Layers: [bold yellow]{best_gpu_layers}[/bold yellow]")
+            
+            # Safely format context
+            try:
+                if best_context != 'N/A' and best_context is not None:
+                    context_val = int(float(best_context))
+                    lines.append(f"  📝 Max Context: [bold yellow]{context_val:,}[/bold yellow] tokens")
+                else:
+                    lines.append(f"  📝 Max Context: {best_context}")
+            except (ValueError, TypeError):
+                lines.append(f"  📝 Max Context: {best_context}")
+                
+            # Safely format VRAM usage
+            try:
+                if best_vram_usage != 'N/A' and best_vram_usage is not None:
+                    vram_val = float(best_vram_usage)
+                    lines.append(f"  🎮 VRAM Usage: [bold yellow]{vram_val:.0f} MB[/bold yellow]")
+                else:
+                    lines.append(f"  🎮 VRAM Usage: {best_vram_usage}")
+            except (ValueError, TypeError):
+                lines.append(f"  🎮 VRAM Usage: {best_vram_usage}")
+                
+            # Safely format RAM usage
+            try:
+                if best_ram_usage != 'N/A' and best_ram_usage is not None:
+                    ram_val = float(best_ram_usage)
+                    lines.append(f"  💾 RAM Usage: [bold yellow]{ram_val:.0f} MB[/bold yellow]")
+                else:
+                    lines.append(f"  💾 RAM Usage: {best_ram_usage}")
+            except (ValueError, TypeError):
+                lines.append(f"  💾 RAM Usage: {best_ram_usage}")
+            lines.append("")
+            
+            # Alternative Configurations Table
+            configurations = result.get('analysis', [])
+            if configurations:
+                lines.append("[bold cyan]⚙️ Alternative Configurations:[/bold cyan]")
+                lines.append("[dim]GPU Layers | Max Context | VRAM Used | RAM Used[/dim]")
+                lines.append("[dim]-----------|-------------|-----------|----------[/dim]")
+                
+                for config in configurations[:6]:  # Show top 6
+                    gpu_layers = config.get('gpu_layers', 'N/A')
+                    max_context = config.get('max_context', 'N/A')
+                    vram_usage = config.get('vram_usage_mb', 'N/A')
+                    ram_usage = config.get('ram_usage_mb', 'N/A')
+                    
+                    # Safely format numbers
+                    try:
+                        ctx_str = f"{int(max_context):,}" if max_context != 'N/A' and max_context is not None else str(max_context)
+                    except (ValueError, TypeError):
+                        ctx_str = str(max_context)
+                    
+                    try:
+                        vram_str = f"{float(vram_usage):.0f}MB" if vram_usage != 'N/A' and vram_usage is not None else str(vram_usage)
+                    except (ValueError, TypeError):
+                        vram_str = str(vram_usage)
+                    
+                    try:
+                        ram_str = f"{float(ram_usage):.0f}MB" if ram_usage != 'N/A' and ram_usage is not None else str(ram_usage)
+                    except (ValueError, TypeError):
+                        ram_str = str(ram_usage)
+                    
+                    # Format GPU layers safely
+                    try:
+                        gpu_str = f"{int(gpu_layers):>2}" if gpu_layers != 'N/A' and gpu_layers is not None else f"{str(gpu_layers):>2}"
+                    except (ValueError, TypeError):
+                        gpu_str = f"{str(gpu_layers):>2}"
+                    
+                    lines.append(f"    {gpu_str} | {ctx_str:>11} | {vram_str:>9} | {ram_str:>8}")
+                lines.append("")
+            
+            # Performance Notes
+            try:
+                gpu_layers_int = int(best_gpu_layers) if isinstance(best_gpu_layers, (int, str)) else 0
+                layer_count_int = int(layer_count) if isinstance(layer_count, (int, str)) else 0
+                
+                if gpu_layers_int == layer_count_int and layer_count_int > 0:
+                    lines.append("[bold green]✅ Full GPU acceleration possible![/bold green]")
+                elif gpu_layers_int > 0:
+                    lines.append(f"[bold yellow]⚡ Hybrid GPU/CPU processing ({gpu_layers_int}/{layer_count_int} layers on GPU)[/bold yellow]")
+                else:
+                    lines.append("[bold red]🐌 CPU-only processing (limited VRAM)[/bold red]")
+            except (ValueError, TypeError):
+                lines.append("[dim]Performance analysis unavailable[/dim]")
+            lines.append("")
+            
+            # Warnings and Recommendations
+            warnings = result.get('warnings', [])
+            if warnings:
+                lines.append("[bold yellow]⚠️ Warnings & Recommendations:[/bold yellow]")
+                for warning in warnings:
+                    lines.append(f"  • {warning}")
+                lines.append("")
+            
+            # Add usage tip
+            lines.append("[dim]💡 Tip: Use these values in your AI software's settings[/dim]")
+            
+            self.metadata_content = "\n".join(lines)
+            self.metadata_display.update(self.metadata_content)
+            
+        except Exception as e:
+            error_msg = f"[bold red]❌ Analysis Failed:[/bold red]\n\n{str(e)}\n\n[dim]Check that the file is a valid GGUF model[/dim]"
             self.metadata_display.update(error_msg)
             self.show_metadata_panel()
     
@@ -401,6 +562,8 @@ class FileBrowserApp(App):
         # Toggle hidden files - try multiple key variations
         elif key in ("period", ".", "full_stop", "h"):
             self.show_hidden = not self.show_hidden
+            # Save settings persistently
+            self.save_settings()
             # Reset selection to prevent index out of bounds
             old_selected = self.selected_index
             self.selected_index = 0
@@ -414,7 +577,7 @@ class FileBrowserApp(App):
                 status = "on" if self.show_hidden else "off"
                 self.path_display.update(f"📂 {self.current_dir} [Hidden files: {status}]")
         
-        # Enter - select/navigate (traditional file browser behavior)
+        # Enter - show metadata/navigate (don't process)
         elif key == "enter":
             if not self.entries or self.selected_index >= len(self.entries):
                 return
@@ -436,9 +599,8 @@ class FileBrowserApp(App):
                 self.hide_metadata_panel()
                 self.refresh_display()
             else:
-                # Select file
-                if self.select_files:
-                    self.exit(entry['path'])
+                # Show file metadata (not process)
+                self.show_file_metadata(entry['path'])
         
         # Space/F2 - process GGUF files/directories
         elif key in ("space", "f2"):

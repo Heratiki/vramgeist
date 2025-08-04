@@ -242,7 +242,7 @@ wheels = [
 
 [[package]]
 name = "vramgeist"
-version = "0.1.0"
+version = "0.3.2"
 source = { editable = "." }
 dependencies = [
     { name = "psutil" },

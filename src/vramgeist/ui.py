@@ -302,7 +302,7 @@ def process_gguf_file(
     console.print("[bold blue]Calculating optimal settings...[/bold blue]")
     
     # Get analysis results
-    analysis_result = analyze_gguf_file(filepath, config, vram_override, ram_override)
+    analysis_result = analyze_gguf_file_with_config(filepath, config, vram_override, ram_override)
     
     # Display model info
     model = analysis_result["model"]

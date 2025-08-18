@@ -107,8 +107,9 @@ def create_results_table(model_size_mb: float, n_layers: int, available_vram: in
     table.add_column("VRAM Usage", style="yellow", justify="center")
     table.add_column("Recommendation", style="white", justify="center")
 
-    best_gpu_layers = n_layers
-    best_context = 0
+    # prefer GPU when contexts tie; initialize to sentinel values
+    best_gpu_layers = None
+    best_context = -1
 
     for gpu_layers in [0, n_layers // 4, n_layers // 2, 3 * n_layers // 4, n_layers]:
         max_ctx = calculate_max_context(model_size_mb, n_layers, gpu_layers, available_vram)
@@ -123,7 +124,10 @@ def create_results_table(model_size_mb: float, n_layers: int, available_vram: in
         else:
             rec = "[blue]⚖️  Good balance[/blue]"
 
-        if max_ctx > best_context and vram_used <= available_vram * 0.9:
+        # prefer higher GPU layer counts when max context ties
+        if vram_used <= available_vram * 0.9 and (
+            max_ctx > best_context or (max_ctx == best_context and gpu_layers > (best_gpu_layers or -1))
+        ):
             best_context = max_ctx
             best_gpu_layers = gpu_layers
 
@@ -209,8 +213,10 @@ def analyze_gguf_file_with_config(
     
     # Calculate recommendations for different GPU layer configurations
     results = []
+    # Track best candidate. If throughput optimization is used, prefer higher score.
     best_gpu_layers = 0
     best_context = 0
+    best_score = -1.0
     
     # If requested, run token/sec benchmark once per model (before per-gpu_layers loop)
     measured_map: Optional[dict] = None
@@ -251,6 +257,7 @@ def analyze_gguf_file_with_config(
             measured_k = None
 
     for gpu_layers in [0, n_layers//4, n_layers//2, 3*n_layers//4, n_layers]:
+        sem = {}
         # If optimizing for throughput prefer semantic-throughput best context selection
         if optimize_for == "throughput":
             sem = calculate_semantic_throughput_best_context(
@@ -274,9 +281,22 @@ def analyze_gguf_file_with_config(
             ram_used = calculate_ram_usage(model_size_mb, n_layers, gpu_layers, max_ctx, config)
         
         # Track best option
-        if max_ctx > best_context:
-            best_context = max_ctx
-            best_gpu_layers = gpu_layers
+        # If the semantic throughput dict was used, it may include a 'score' (higher is better)
+        candidate_score = sem.get("score") if optimize_for == "throughput" and isinstance(sem, dict) else None
+
+        if candidate_score is not None:
+            # Prefer higher semantic score; tie-break by higher context then more GPU layers
+            if candidate_score > best_score or (
+                candidate_score == best_score and (max_ctx > best_context or (max_ctx == best_context and gpu_layers > best_gpu_layers))
+            ):
+                best_score = candidate_score
+                best_context = max_ctx
+                best_gpu_layers = gpu_layers
+        else:
+            # Default: prefer larger context; tie-break by more GPU layers
+            if max_ctx > best_context or (max_ctx == best_context and gpu_layers > best_gpu_layers):
+                best_context = max_ctx
+                best_gpu_layers = gpu_layers
         
         if gpu_layers == 0:
             rec = "CPU only"

@@ -215,6 +215,7 @@ def analyze_gguf_file_with_config(
     # If requested, run token/sec benchmark once per model (before per-gpu_layers loop)
     measured_map: Optional[dict] = None
     measured_k: Optional[float] = None
+    bench_contexts_list: Optional[list[int]] = None
     if measure_tps:
         # measure_tokens_per_second uses python binding first then binary fallback
         try:
@@ -224,6 +225,8 @@ def analyze_gguf_file_with_config(
                     contexts = [int(x.strip()) for x in bench_contexts.split(",") if x.strip()]
                 except Exception:
                     contexts = [1024, 4096, 8192]
+
+            bench_contexts_list = contexts
 
             measured_map = measure_tokens_per_second(
                 filepath,
@@ -315,6 +318,11 @@ def analyze_gguf_file_with_config(
         },
         "config": config.to_dict(),
         "analysis": results,
+        "benchmarks": {
+            "measured_map": measured_map,
+            "fitted_k": measured_k,
+            "contexts": bench_contexts_list,
+        },
         "recommendation": {
             "gpu_layers": best_gpu_layers,
             "max_context": best_context,

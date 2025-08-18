@@ -174,3 +174,35 @@ Pull requests and issues are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for
 ## License
 
 MIT License. See [LICENSE](LICENSE) for details.
+
+## Tokens/sec (TPS) Micro-benchmark and JSON fields
+
+VRAMGEIST can optionally run a short micro-benchmark that measures tokens/second (TPS) for a given model. This helps the tool favor context sizes that maximize throughput instead of just maximizing the context length.
+
+CLI flags
+- `--measure-tps` : Run the TPS micro-benchmark before making recommendations. Disabled by default.
+- `--llama-bin PATH` : Path to a `llama.cpp`-style binary to run the benchmark (preferred). If not provided, VRAMGEIST will try to use the `llama-cpp-python` binding as a fallback.
+- `--bench-contexts "1024,4096,8192"` : Comma-separated list of context lengths to test. Defaults to `1024,4096,8192`.
+
+Behavior
+- The benchmark runs a small number of short generation runs for each configured context and measures elapsed time to compute tokens/sec per context.
+- Measurements are bounded by a timeout and only run when explicitly requested (the micro-bench is opt-in to avoid long runs in CI).
+
+JSON output
+- When using `--json` the returned JSON will include a new top-level object `analysis.benchmarks` with the following fields:
+  - `measured_map` : Map of context length -> measured tokens/sec (or `null` if no measurement was done).
+  - `fitted_k` : A fitted parameter `k` for the heuristic TPS(C) ≈ k / (C + eps) (or `null`).
+  - `contexts` : The list of context values that were used for the bench (or `null`).
+
+Example (JSON snippet):
+
+```json
+"analysis": [ /* per-gpu-layers analysis */ ],
+"benchmarks": {
+  "measured_map": {"1024": 2300.5, "4096": 1500.4, "8192": 900.1},
+  "fitted_k": 2300000.0,
+  "contexts": [1024, 4096, 8192]
+}
+```
+
+If you rely on this data programmatically, remember the bench is opt-in and may be absent in automation unless `--measure-tps` is passed or your environment is configured to allow longer runs.

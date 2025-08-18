@@ -27,8 +27,7 @@ def calculate_vram_usage(
     model_vram = model_size_mb * gpu_layers_ratio
 
     # Context cache VRAM (configurable formula)
-    # Multiply context term by number of layers (conservative estimate)
-    context_vram = (context_length * max(1, n_layers) * config.hidden_size * 2 * config.bytes_per_element) / (1024 * 1024)
+    context_vram = (context_length * config.hidden_size * 2 * config.bytes_per_element) / (1024 * 1024)
 
     total_vram = model_vram + context_vram + config.vram_overhead_mb
     return total_vram
@@ -56,8 +55,6 @@ def calculate_ram_usage(
     model_ram = model_size_mb * cpu_layers_ratio
 
     context_ram = (context_length * config.hidden_size * 2 * config.bytes_per_element) / (1024 * 1024)
-    # Multiply context term by number of layers (conservative estimate)
-    context_ram = (context_length * max(1, n_layers) * config.hidden_size * 2 * config.bytes_per_element) / (1024 * 1024)
 
     total_ram = model_ram + context_ram + config.ram_overhead_mb
     return total_ram

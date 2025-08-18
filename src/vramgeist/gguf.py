@@ -1,7 +1,8 @@
 import os
+import re
 import struct
 from typing import Dict, Any, List, Tuple, Optional
-from rich.console import Console
+from ._rich_fallback import Console
 
 console = Console(force_terminal=True, width=120)
 
@@ -19,8 +20,10 @@ def read_exact(f, n: int) -> bytes:
 
 def read_gguf_metadata(filepath: str, max_kv: int = 1000, max_key_len: int = 1024, max_str_len: int = 1_000_000) -> Tuple[Optional[Dict[str, Any]], List[str]]:
     """
-    Extract basic metadata from GGUF file with defensive parsing.
+    Extract basic metadata from a GGUF file with defensive parsing.
     Returns (metadata_dict or None on severe mismatch, warnings_list).
+    Enhancements: string arrays are returned as Python lists and we attempt to
+    infer key=value pairs from string blobs/arrays (useful for HF-style metadata).
     """
     warnings: List[str] = []
     try:
@@ -48,6 +51,7 @@ def read_gguf_metadata(filepath: str, max_kv: int = 1000, max_key_len: int = 102
 
                 value_type = struct.unpack("<I", read_exact(f, 4))[0]
 
+                # Value type mapping comes from GGUF spec; handle common types defensively
                 if value_type == 4:  # STRING
                     value_len = struct.unpack("<Q", read_exact(f, 8))[0]
                     if value_len > max_str_len:
@@ -57,20 +61,24 @@ def read_gguf_metadata(filepath: str, max_kv: int = 1000, max_key_len: int = 102
                 elif value_type == 5:  # ARRAY
                     array_type = struct.unpack("<I", read_exact(f, 4))[0]
                     array_len = struct.unpack("<Q", read_exact(f, 8))[0]
-                    # Skip array payload in a length-aware way
                     if array_type == 4:  # STRING array
+                        items: List[str] = []
                         for _ in range(array_len):
                             str_len = struct.unpack("<Q", read_exact(f, 8))[0]
-                            # clamp reads for safety
                             if str_len > max_str_len:
                                 warnings.append(f"string element len {str_len} exceeds limit {max_str_len}, truncating")
                                 str_len = max_str_len
-                            _ = read_exact(f, str_len)
-                        value = f"[array of {array_len} strings]"
+                            raw = read_exact(f, str_len)
+                            try:
+                                s = raw.decode("utf-8", errors="replace")
+                            except Exception:
+                                s = raw.decode("latin-1", errors="replace")
+                            items.append(s)
+                        value = items
                     else:
-                        # For non-string arrays, we only note the length
+                        # For non-string arrays we don't try to decode elements; note length
                         value = f"[array of {array_len} items]"
-                        # NOTE: skipping raw payload requires knowing element width; keeping it abstract
+                        # Attempt to skip payload conservatively: if element size known, could skip
                 elif value_type in (6, 7):  # INT32, UINT32
                     value = struct.unpack("<I", read_exact(f, 4))[0]
                 elif value_type in (8, 9):  # INT64, UINT64
@@ -83,11 +91,43 @@ def read_gguf_metadata(filepath: str, max_kv: int = 1000, max_key_len: int = 102
                 elif value_type == 12:  # BOOL
                     value = struct.unpack("<?", read_exact(f, 1))[0]
                 else:
-                    # Unknown type: cannot determine payload size; emit warning and abort kv parsing safely
                     warnings.append(f"Unknown value_type {value_type}, stopping metadata parse")
                     break
 
                 metadata[key] = value
+
+            # Post-process collected metadata: infer key=value pairs from strings/lists
+            def _try_parse_literal(s: str):
+                s_lower = s.lower()
+                if s_lower in ("true", "false"):
+                    return s_lower == "true"
+                try:
+                    if "." in s:
+                        return float(s)
+                    return int(s)
+                except Exception:
+                    return s
+
+            for k, v in list(metadata.items()):
+                try:
+                    if isinstance(v, list):
+                        for item in v:
+                            if isinstance(item, str) and "=" in item:
+                                subk, subv = item.split("=", 1)
+                                subk = subk.strip()
+                                subv = subv.strip()
+                                if subk and subk not in metadata:
+                                    metadata[subk] = _try_parse_literal(subv)
+                    elif isinstance(v, str) and "=" in v:
+                        parts = [p.strip() for p in re.split(r'[\n,;]', v) if p.strip()]
+                        for part in parts:
+                            if "=" in part:
+                                subk, subv = part.split("=", 1)
+                                subk = subk.strip()
+                                if subk and subk not in metadata:
+                                    metadata[subk] = _try_parse_literal(subv.strip())
+                except Exception:
+                    continue
 
             return metadata, warnings
     except ParserError as pe:
@@ -98,8 +138,12 @@ def read_gguf_metadata(filepath: str, max_kv: int = 1000, max_key_len: int = 102
         return None, [f"error: {e}"]
 
 
-def estimate_model_size_mb(filepath: str) -> float:
+def estimate_model_size_mb(filepath: str | os.PathLike) -> float:
+    """Estimate model file size in MB. Accepts string paths or Path objects."""
     try:
+        # Support pathlib.Path inputs
+        if hasattr(filepath, 'as_posix') or hasattr(filepath, '__fspath__'):
+            filepath = os.fspath(filepath)
         file_size = os.path.getsize(filepath)
         return file_size / (1024 * 1024)
     except Exception:

@@ -143,3 +143,53 @@ class TestGGUFParsing:
             assert result1 > 0
         finally:
             os.unlink(temp_path)
+
+    def test_read_gguf_metadata_string_array_parsing(self):
+        """Test that string-array metadata entries containing key=value pairs are parsed into metadata keys"""
+        # Create a GGUF with one metadata key whose value is an array of strings
+        temp_file = tempfile.NamedTemporaryFile(suffix='.gguf', delete=False)
+        try:
+            # Header
+            temp_file.write(b'GGUF')
+            temp_file.write(struct.pack('<I', 3))  # version
+            temp_file.write(struct.pack('<Q', 0))  # tensor count
+
+            # We'll write 1 metadata KV
+            temp_file.write(struct.pack('<Q', 1))
+
+            # Key: 'metadata'
+            key = 'metadata'.encode('utf-8')
+            temp_file.write(struct.pack('<Q', len(key)))
+            temp_file.write(key)
+
+            # Value type: ARRAY (5)
+            temp_file.write(struct.pack('<I', 5))
+            # Array type: STRING (4)
+            temp_file.write(struct.pack('<I', 4))
+            # Array length: 2
+            temp_file.write(struct.pack('<Q', 2))
+
+            # Element 1: 'hidden_size=4096'
+            s1 = 'hidden_size=4096'.encode('utf-8')
+            temp_file.write(struct.pack('<Q', len(s1)))
+            temp_file.write(s1)
+
+            # Element 2: 'n_layers=32'
+            s2 = 'n_layers=32'.encode('utf-8')
+            temp_file.write(struct.pack('<Q', len(s2)))
+            temp_file.write(s2)
+
+            temp_file.close()
+
+            metadata, warnings = read_gguf_metadata(temp_file.name)
+            assert isinstance(metadata, dict)
+            # Our parser should have extracted 'hidden_size' and 'n_layers'
+            assert 'hidden_size' in metadata
+            assert 'n_layers' in metadata
+            assert int(metadata['hidden_size']) == 4096
+            assert int(metadata['n_layers']) == 32
+        finally:
+            try:
+                os.unlink(temp_file.name)
+            except Exception:
+                pass

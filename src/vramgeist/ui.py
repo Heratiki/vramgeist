@@ -1,13 +1,15 @@
 import os
 import json
 from typing import Dict, Any, Optional
-from rich.panel import Panel
-from rich.table import Table
-from rich.layout import Layout
-from rich.text import Text
-from rich import box
-from rich.align import Align
-from rich.console import Console
+from ._rich_fallback import Panel, Table, Layout, Text, box, Align, Console
+
+# Provide typing aliases so static analyzers treat runtime fallbacks as Any
+from typing import Any as _Any
+LayoutType: _Any = Layout
+PanelType: _Any = Panel
+TableType: _Any = Table
+AlignType: _Any = Align
+TextType: _Any = Text
 
 from .calc import (
     calculate_max_context,
@@ -32,7 +34,7 @@ def analyze_gguf_file(path: "os.PathLike[str] | str") -> Dict[str, Any]:
     return analyze_gguf_file_with_config(str(path), DEFAULT_CONFIG, None, None)
 
 
-def create_analysis_layout(model_name: str, status: str = "Initializing...") -> Layout:
+def create_analysis_layout(model_name: str, status: str = "Initializing...") -> _Any:
     """Create the main analysis layout"""
     layout = Layout()
 
@@ -69,7 +71,7 @@ def create_analysis_layout(model_name: str, status: str = "Initializing...") -> 
     return layout
 
 
-def update_model_info(layout: Layout, model_name: str, available_vram: int, model_size_mb: float, n_layers: int, status: str = "Analyzing...") -> None:
+def update_model_info(layout: _Any, model_name: str, available_vram: int, model_size_mb: float, n_layers: int, status: str = "Analyzing...") -> None:
     """Update the model info section"""
     model_info_content = (
         f"[bold blue]📁 Model:[/bold blue] [cyan]{model_name}[/cyan]\n"
@@ -133,7 +135,7 @@ def create_results_table(model_size_mb: float, n_layers: int, available_vram: in
     return table, best_gpu_layers, best_context
 
 
-def create_recommendation_panel(model_size_mb: float, n_layers: int, best_gpu_layers: int, best_context: int, available_vram: int) -> Panel:
+def create_recommendation_panel(model_size_mb: float, n_layers: int, best_gpu_layers: int, best_context: int, available_vram: int) -> _Any:
     """Create the final recommendation panel"""
     expected_vram = calculate_vram_usage(model_size_mb, n_layers, best_gpu_layers, best_context)
 
@@ -163,13 +165,14 @@ def analyze_gguf_file_with_config(
     filepath: str,
     config: VRAMConfig = DEFAULT_CONFIG,
     vram_override: Optional[int] = None,
-    ram_override: Optional[int] = None
+    ram_override: Optional[int] = None,
+    force_detect: bool = False,
 ) -> Dict[str, Any]:
     """Analyze a GGUF file and return structured results"""
     model_name = os.path.basename(filepath)
     
     # Step 1: Get GPU VRAM
-    available_vram = vram_override if vram_override else get_gpu_memory()
+    available_vram = vram_override if vram_override else get_gpu_memory(force=force_detect)
     
     # Step 1.5: Get system RAM 
     if ram_override:
@@ -273,7 +276,8 @@ def process_gguf_file(
     config: VRAMConfig = DEFAULT_CONFIG,
     json_output: bool = False,
     vram_override: Optional[int] = None,
-    ram_override: Optional[int] = None
+    ram_override: Optional[int] = None,
+    force_detect: bool = False,
 ) -> None:
     """Process a single GGUF file and display analysis"""
     if json_output:
@@ -302,7 +306,7 @@ def process_gguf_file(
     console.print("[bold blue]Calculating optimal settings...[/bold blue]")
     
     # Get analysis results
-    analysis_result = analyze_gguf_file_with_config(filepath, config, vram_override, ram_override)
+    analysis_result = analyze_gguf_file_with_config(filepath, config, vram_override, ram_override, force_detect)
     
     # Display model info
     model = analysis_result["model"]

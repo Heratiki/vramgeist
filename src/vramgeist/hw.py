@@ -3,13 +3,35 @@ import subprocess
 import tempfile
 import os
 import re
-from typing import Tuple, List
-from rich.console import Console
+from typing import Tuple, List, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # Optional dev dependency; present during tests or dev environments
+    import psutil  # type: ignore
+from ._rich_fallback import Console
 
 console = Console(force_terminal=True, width=120)
 
 
-def get_gpu_memory(timeout: float = 2.0, policy: str = "max") -> int:
+_GPU_CACHE: dict = {}
+
+
+def _clear_gpu_cache() -> None:
+    """Clear the in-memory GPU detection cache (useful for tests)."""
+    _GPU_CACHE.clear()
+
+
+def _get_psutil():
+    """Attempt to import psutil and return the module or None if unavailable."""
+    try:
+        import importlib
+        psutil = importlib.import_module('psutil')
+        return psutil
+    except Exception:
+        return None
+
+
+def get_gpu_memory(timeout: float = 2.0, policy: str = "max", force: bool = False) -> int:
     """
     Return selected GPU total VRAM in MB with cross-platform detection.
     Supports NVIDIA, AMD, Intel, and Apple GPUs.
@@ -27,11 +49,25 @@ def get_gpu_memory(timeout: float = 2.0, policy: str = "max") -> int:
         _detect_dxdiag_gpu,  # Windows fallback
     ]
     
+    # Check cache first (unless force requested)
+    cache_key = f"gpu_{policy}"
+    if not force and cache_key in _GPU_CACHE:
+        try:
+            cached = _GPU_CACHE[cache_key]
+            return int(cached)
+        except Exception:
+            pass
+
     for detector in detectors:
         try:
             result = detector(timeout, policy)
             if result > 0:
-                return result
+                    # Cache result for this run
+                    try:
+                        _GPU_CACHE[cache_key] = int(result)
+                    except Exception:
+                        pass
+                    return result
         except Exception as e:
             # Only show debug info for unexpected errors, not normal failures
             if "timeout" not in str(e).lower() and "not found" not in str(e).lower():
@@ -127,18 +163,19 @@ def _detect_intel_gpu(timeout: float, policy: str) -> int:
         if result.returncode == 0:
             # Intel integrated GPUs typically use shared memory
             # Estimate 25% of system RAM as available to GPU (conservative)
-            try:
-                import psutil
-                total_ram = psutil.virtual_memory().total // (1024 * 1024)
-                estimated_vram = min(total_ram // 4, 4096)  # Cap at 4GB
-                console.print(f"[green]Detected Intel GPU: estimated {estimated_vram} MB shared VRAM[/green]")
-                return estimated_vram
-            except Exception:
-                pass
-                
+            psutil = _get_psutil()
+            if psutil is not None:
+                try:
+                    total_ram = psutil.virtual_memory().total // (1024 * 1024)
+                    estimated_vram = min(total_ram // 4, 4096)  # Cap at 4GB
+                    console.print(f"[green]Detected Intel GPU: estimated {estimated_vram} MB shared VRAM[/green]")
+                    return estimated_vram
+                except Exception:
+                    pass
+
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
-    
+
     return 0
 
 
@@ -162,15 +199,16 @@ def _detect_apple_gpu(timeout: float, policy: str) -> int:
                 if "Total Number of Cores" in line and "GPU" in line:
                     # This indicates Apple Silicon GPU
                     # Get total system memory as it's unified
-                    try:
-                        import psutil
-                        total_ram = psutil.virtual_memory().total // (1024 * 1024)
-                        # Apple Silicon GPUs can use most of system RAM
-                        estimated_vram = int(total_ram * 0.7)  # 70% available to GPU
-                        console.print(f"[green]Detected Apple Silicon GPU: {estimated_vram} MB unified memory[/green]")
-                        return estimated_vram
-                    except Exception:
-                        pass
+                    psutil = _get_psutil()
+                    if psutil is not None:
+                        try:
+                            total_ram = psutil.virtual_memory().total // (1024 * 1024)
+                            # Apple Silicon GPUs can use most of system RAM
+                            estimated_vram = int(total_ram * 0.7)  # 70% available to GPU
+                            console.print(f"[green]Detected Apple Silicon GPU: {estimated_vram} MB unified memory[/green]")
+                            return estimated_vram
+                        except Exception:
+                            pass
                         
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
@@ -182,13 +220,12 @@ def _detect_dxdiag_gpu(timeout: float, policy: str) -> int:
     """Detect GPU VRAM using Windows dxdiag (DirectX Diagnostics)"""
     if platform.system() != "Windows":
         return 0
-        
     temp_file = None
     try:
         # Create temporary file for dxdiag output in system temp directory
         temp_dir = tempfile.gettempdir()
         temp_file = os.path.join(temp_dir, f"vramgeist_dxdiag_{os.getpid()}.txt")
-        
+
         # Run dxdiag to generate report (no console output to avoid UI popup)
         result = subprocess.run(
             ["dxdiag", "/t", temp_file],
@@ -197,10 +234,10 @@ def _detect_dxdiag_gpu(timeout: float, policy: str) -> int:
             timeout=timeout * 3,  # dxdiag can be quite slow
             creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
         )
-        
+
         if result.returncode != 0:
             return 0
-            
+
         # Wait for file to be written (dxdiag can be slow)
         import time
         for _ in range(10):  # Wait up to 5 seconds
@@ -209,11 +246,11 @@ def _detect_dxdiag_gpu(timeout: float, policy: str) -> int:
             time.sleep(0.5)
         else:
             return 0  # File not created or too small
-        
+
         # Parse the dxdiag output file
         with open(temp_file, 'r', encoding='utf-8', errors='ignore') as f:
             content = f.read()
-            
+
         vram_values = _parse_dxdiag_content(content)
 
         # If dxdiag only surfaced "Total/Display/Approx Total" values but no dedicated/video memory
@@ -259,7 +296,7 @@ def _detect_dxdiag_gpu(timeout: float, policy: str) -> int:
         if vram_values:
             console.print(f"[green]Detected GPU(s) via dxdiag: {vram_values} MB VRAM[/green]")
             return vram_values[0] if policy == "first" else max(vram_values)
-            
+
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError, PermissionError):
         pass
     finally:
@@ -269,7 +306,7 @@ def _detect_dxdiag_gpu(timeout: float, policy: str) -> int:
                 os.unlink(temp_file)
             except OSError:
                 pass  # File might be locked, ignore cleanup failure
-    
+
     return 0
 
 
@@ -349,12 +386,23 @@ def _parse_dxdiag_content(content: str) -> List[int]:
     tier_c_vals = _collect(tier_c_patterns)
 
     if tier_c_vals:
-        # Detect explicit small/zero dedicated memory signal
-        dedicated_small = bool(re.search(r'Dedicated\s+(?:Video\s+)?Memory:\s*(\d+)\s*MB', content, re.IGNORECASE) and
-                               int(re.search(r'Dedicated\s+(?:Video\s+)?Memory:\s*(\d+)\s*MB', content, re.IGNORECASE).group(1)) <= 256)
+        # Detect explicit small/zero dedicated memory signal safely (guard group access)
+        dedicated_match = re.search(r'Dedicated\s+(?:Video\s+)?Memory:\s*(\d+)\s*MB', content, re.IGNORECASE)
+        dedicated_small = False
+        if dedicated_match and dedicated_match.group(1):
+            try:
+                dedicated_small = int(dedicated_match.group(1)) <= 256
+            except Exception:
+                dedicated_small = False
+
         # Detect small video memory signal (often iGPU indicator)
-        video_small = bool(re.search(r'Video\s+Memory:\s*(\d+)\s*MB', content, re.IGNORECASE) and
-                           int(re.search(r'Video\s+Memory:\s*(\d+)\s*MB', content, re.IGNORECASE).group(1)) <= 256)
+        video_match = re.search(r'Video\s+Memory:\s*(\d+)\s*MB', content, re.IGNORECASE)
+        video_small = False
+        if video_match and video_match.group(1):
+            try:
+                video_small = int(video_match.group(1)) <= 256
+            except Exception:
+                video_small = False
 
         if dedicated_small and video_small:
             return []
@@ -368,11 +416,14 @@ def get_system_memory() -> Tuple[int, int]:
     Returns (total_mb, available_mb). Fallback to (16384, 12288) on error.
     """
     try:
-        import psutil  # import locally to avoid issues if absent in some environments
-        memory = psutil.virtual_memory()
-        total_ram_mb = memory.total // (1024 * 1024)
-        available_ram_mb = memory.available // (1024 * 1024)
-        return total_ram_mb, available_ram_mb
+        psutil = _get_psutil()
+        if psutil is not None:
+            memory = psutil.virtual_memory()
+            total_ram_mb = memory.total // (1024 * 1024)
+            available_ram_mb = memory.available // (1024 * 1024)
+            return total_ram_mb, available_ram_mb
+        else:
+            raise RuntimeError("psutil not available")
     except Exception as e:
         console.print(f"[yellow]Could not detect system RAM: {e}. Using defaults.[/yellow]")
         return 16384, 12288

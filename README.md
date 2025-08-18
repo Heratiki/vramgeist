@@ -143,11 +143,13 @@ VRAMGEIST_BROWSE_AUTOPATH="/models/llama-7b.gguf" vramgeist
 
 ## Optional Dependency
 
-The interactive browser requires `prompt_toolkit` (declared in `pyproject.toml`):
+The interactive browser uses `textual` (declared in `pyproject.toml` / `uv.lock`) for the TUI. Imports are lazy so the package can be used programmatically without requiring TUI extras unless `vramgeist` is run interactively.
 
-- `prompt_toolkit>=3.0,<4.0`
+If `textual` is not installed and you attempt to open the TUI, you'll get a clear error message with installation instructions:
 
-If not installed, you'll see a clear error message with installation instructions.
+```sh
+uv pip install textual
+```
 
 ## Intended Use Cases
 
@@ -163,7 +165,7 @@ If not installed, you'll see a clear error message with installation instruction
 - **Dependency errors:**  
   Install missing dependencies with `uv pip install .`
 - **Interactive browser issues:**  
-  Make sure your terminal supports prompt_toolkit and Unicode.
+  Make sure your terminal supports `textual` (modern terminal emulators) and Unicode. If you encounter rendering issues, try a different terminal or update your `textual`/`rich` versions.
 
 ## Contributing
 

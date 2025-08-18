@@ -2,9 +2,7 @@ from pathlib import Path
 import os
 import sys
 import argparse
-from rich.console import Console
-from rich.panel import Panel
-from rich import box
+from ._rich_fallback import Console, Panel, box
 
 # Import from modular architecture
 from .ui import process_gguf_file
@@ -109,6 +107,12 @@ Examples:
         type=int,
         help="Override RAM detection with manual value in MB"
     )
+
+    parser.add_argument(
+        "--force-detect",
+        action="store_true",
+        help="Force re-running hardware detection probes (bypass any caching)"
+    )
     
     return parser
 
@@ -210,7 +214,7 @@ def main() -> int:
             if not path.exists():
                 console.print(f"[red]Error: File '{path}' not found[/red]")
                 continue
-            process_gguf_file(str(path), config, args.json, args.vram_mb, args.ram_mb)
+            process_gguf_file(str(path), config, args.json, args.vram_mb, args.ram_mb, args.force_detect)
             total_files_processed += 1
 
         elif path.is_dir():
@@ -227,7 +231,7 @@ def main() -> int:
                 ))
 
             for gguf_file in sorted(gguf_files):
-                process_gguf_file(str(gguf_file), config, args.json, args.vram_mb, args.ram_mb)
+                process_gguf_file(str(gguf_file), config, args.json, args.vram_mb, args.ram_mb, args.force_detect)
                 total_files_processed += 1
 
         else:
@@ -245,7 +249,7 @@ def main() -> int:
 
                 for gguf_file in sorted(gguf_matches):
                     if os.path.exists(gguf_file):
-                        process_gguf_file(gguf_file, config, args.json, args.vram_mb, args.ram_mb)
+                        process_gguf_file(gguf_file, config, args.json, args.vram_mb, args.ram_mb, args.force_detect)
                         total_files_processed += 1
             else:
                 console.print(f"[red]Error: '{path}' is not a valid GGUF file, directory, or pattern[/red]")
@@ -258,6 +262,9 @@ def main() -> int:
             style="bright_green",
             box=box.DOUBLE
         ))
+
+    # Return success exit code
+    return 0
 
 
 # Top-level guard for proper exit code and output handling

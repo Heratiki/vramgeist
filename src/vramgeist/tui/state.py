@@ -3,11 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List
+from .options import TUIOptions
 
 
 @dataclass(slots=True)
 class TUIState:
     files: List[Path]
+    options: TUIOptions = field(default_factory=TUIOptions)
     results_by_path: Dict[Path, Dict[str, Any]] = field(default_factory=dict)
     errors_by_path: Dict[Path, str] = field(default_factory=dict)
     selected_index: int = 0
@@ -17,6 +19,14 @@ class TUIState:
 
     def add_error(self, path: Path, message: str) -> None:
         self.errors_by_path[path] = message
+
+    def toggle_optimization_mode(self) -> None:
+        """Toggle between throughput and memory optimization"""
+        self.options.optimize_for = "memory" if self.options.optimize_for == "throughput" else "throughput"
+
+    def toggle_debug(self) -> None:
+        """Toggle debug mode on/off"""
+        self.options.debug = not self.options.debug
 
     def select_next(self) -> None:
         if not self.files:

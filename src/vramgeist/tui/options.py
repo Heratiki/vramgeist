@@ -11,3 +11,5 @@ class TUIOptions:
     json_export: Path | None = None
     log_level: str = "WARNING"
     start_in_preview: bool = False
+    optimize_for: str = "throughput"  # "throughput" or "memory"
+    debug: bool = False

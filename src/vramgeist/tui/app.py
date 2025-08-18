@@ -37,7 +37,7 @@ class VramgeistAppBase:
         self.paths = paths
         self.options = options
         self.analyze_fn = analyze_fn
-        self.state = state or TUIState(files=paths)
+        self.state = state or TUIState(files=paths, options=options)
         self.max_workers = max_workers
 
     def _make_textual_app_class(self):
@@ -71,6 +71,12 @@ class VramgeistAppBase:
             #body {
                 overflow: auto;
             }
+            .settings {
+                background: blue;
+                color: white;
+                text-align: center;
+                margin: 1;
+            }
             """
 
             TITLE = "vramgeist (experimental TUI)"
@@ -83,6 +89,9 @@ class VramgeistAppBase:
 
             def compose(self) -> ComposeResult:
                 yield Header(show_clock=False, name="vramgeist (experimental TUI)")
+                # Add settings display
+                settings_text = f"Mode: {self._state.options.optimize_for.upper()} | Debug: {'ON' if self._state.options.debug else 'OFF'} | Press 'm' to toggle mode, 'd' to toggle debug"
+                yield Static(settings_text, id="settings", classes="settings")
                 with Vertical(id="body") as body:
                     for line in self._lines():
                         yield Static(line, expand=False)
@@ -120,7 +129,26 @@ class VramgeistAppBase:
             async def _analyze_one(self, loop: asyncio.AbstractEventLoop, path: Path) -> None:
                 try:
                     # Run CPU-bound or blocking IO in a thread to avoid blocking event loop
-                    result = await loop.run_in_executor(self._executor, analyze_fn, path)
+                    # Create a wrapper that uses current state options
+                    def analyze_with_current_options(p: Path) -> Dict[str, Any]:
+                        from ..config import DEFAULT_CONFIG
+                        from .. import ui as ui_module
+                        return ui_module.analyze_gguf_file_with_config(
+                            str(p),
+                            config=DEFAULT_CONFIG,
+                            vram_override=None,
+                            ram_override=None,
+                            force_detect=False,
+                            optimize_for=self._state.options.optimize_for,
+                            gpu_bandwidth_gbps=None,
+                            measure_bandwidth=False,
+                            measure_tps=False,
+                            llama_bin=None,
+                            bench_contexts=None,
+                            debug=self._state.options.debug,
+                        )
+                    
+                    result = await loop.run_in_executor(self._executor, analyze_with_current_options, path)
                     self._state.add_result(path, result)
                 except Exception as e:
                     self._state.add_error(path, str(e))
@@ -131,6 +159,12 @@ class VramgeistAppBase:
                 self._body.remove_children()
                 for line in self._lines():
                     self._body.mount(Static(line, expand=False))
+
+            def _refresh_settings(self) -> None:
+                """Update the settings display"""
+                settings_text = f"Mode: {self._state.options.optimize_for.upper()} | Debug: {'ON' if self._state.options.debug else 'OFF'} | Press 'm' to toggle mode, 'd' to toggle debug"
+                settings_widget = self.query_one("#settings")
+                settings_widget.update(settings_text)
 
             async def on_key(self, event) -> None:
                 # Navigation: j/k/up/down
@@ -143,6 +177,26 @@ class VramgeistAppBase:
                 # Quit: q/escape
                 elif event.key in ("q", "escape"):
                     await self.action_quit()
+                # Toggle optimization mode: 'm'
+                elif event.key == "m":
+                    self._state.toggle_optimization_mode()
+                    self._refresh_settings()
+                    # Clear results to trigger re-analysis with new settings
+                    self._state.results_by_path.clear()
+                    self._state.errors_by_path.clear()
+                    self._refresh_list()
+                    # Re-trigger analysis for all files
+                    await self._spawn_analysis_tasks()
+                # Toggle debug mode: 'd'
+                elif event.key == "d":
+                    self._state.toggle_debug()
+                    self._refresh_settings()
+                    # Clear results to trigger re-analysis with new settings
+                    self._state.results_by_path.clear()
+                    self._state.errors_by_path.clear()
+                    self._refresh_list()
+                    # Re-trigger analysis for all files
+                    await self._spawn_analysis_tasks()
                 # Toggle hidden files: '.' or 'period'
                 elif event.key in (".", "period"):
                     if not hasattr(self._state, "show_hidden"):
@@ -240,10 +294,10 @@ def run_tui(paths: List[Path], options: TUIOptions) -> int:
     # Lazy import of ui for analysis function to avoid early imports
     from .. import ui as ui_module  # legacy ui remains unchanged
 
-    def analyze_gguf_file(path: Path) -> Dict[str, Any]:
-        # Call existing analyze function and return its result as dict
-        return ui_module.analyze_gguf_file(path)
+    # Dummy analyze function since we handle analysis in _analyze_one method
+    def dummy_analyze_gguf_file(path: Path) -> Dict[str, Any]:
+        return {}
 
-    controller = VramgeistAppBase(paths=paths, options=options, analyze_fn=analyze_gguf_file)
+    controller = VramgeistAppBase(paths=paths, options=options, analyze_fn=dummy_analyze_gguf_file)
     # Run with asyncio; let textual manage event loop via run_async
     return asyncio.run(controller.run_async())

@@ -1,5 +1,7 @@
 from typing import Tuple, Optional
 from .config import VRAMConfig, DEFAULT_CONFIG
+from math import log
+from .hw import get_gpu_bandwidth_gbps
 
 
 def calculate_vram_usage(
@@ -67,6 +69,124 @@ def calculate_total_memory_usage(
     vram_usage = calculate_vram_usage(model_size_mb, n_layers, n_gpu_layers, context_length, config)
     ram_usage = calculate_ram_usage(model_size_mb, n_layers, n_gpu_layers, context_length, config)
     return vram_usage, ram_usage
+
+
+def _estimate_tps(
+    context_length: int,
+    n_layers: int,
+    hidden_size: int,
+    bytes_per_element: int,
+    bw_gbps: float,
+    beta: float = 2.0,
+) -> float:
+    """
+    Estimate tokens-per-second (sustained) using a conservative memory-bound per-token model.
+
+    bytes_per_token ~ beta * n_layers * hidden_size * bytes_per_element * context_length
+    TPS = (BW_bytes_per_sec) / bytes_per_token
+    """
+    if context_length <= 0 or bw_gbps <= 0:
+        return 0.0
+
+    bytes_per_token = beta * max(1, n_layers) * max(1, hidden_size) * bytes_per_element * max(1, context_length)
+    bw_bps = bw_gbps * 1e9
+    tps = bw_bps / bytes_per_token
+    return float(tps)
+
+
+def calculate_semantic_throughput_best_context(
+    model_size_mb: float,
+    n_layers: int,
+    n_gpu_layers: int,
+    available_vram_mb: int,
+    available_ram_mb: Optional[int] = None,
+    config: VRAMConfig = DEFAULT_CONFIG,
+    bw_gbps: Optional[float] = None,
+    measured_bandwidth: bool = False,
+    c_ref: int = 8192,
+    beta: float = 2.0,
+    memory_penalty_pow: float = 2.0,
+    measured_tps_map: Optional[dict] = None,
+    measured_k: Optional[float] = None,
+) -> dict:
+    """
+    Choose best context by maximizing semantic throughput (tokens/sec * usefulness).
+
+    Returns a diagnostics dict with chosen context, TPS, score and candidate list.
+    """
+    common_sizes = [
+        512,
+        1024,
+        2048,
+        4096,
+        8192,
+        16384,
+        32768,
+        65536,
+    ]
+
+    usable_vram = available_vram_mb * config.vram_safety_margin
+
+    # Resolve bandwidth if not provided
+    if bw_gbps is None:
+        bw_gbps = get_gpu_bandwidth_gbps(available_vram_mb=available_vram_mb, measured=measured_bandwidth)
+
+    candidates = []
+    for C in common_sizes:
+        # Memory feasibility
+        vram_used = calculate_vram_usage(model_size_mb, n_layers, n_gpu_layers, C, config)
+        if vram_used > usable_vram:
+            continue
+
+        if available_ram_mb is not None:
+            ram_used = calculate_ram_usage(model_size_mb, n_layers, n_gpu_layers, C, config)
+            if ram_used > available_ram_mb * config.ram_safety_margin:
+                continue
+
+        # If we have measured TPS map, prefer it (or use fitted k)
+        if measured_tps_map and C in measured_tps_map:
+            tps = float(measured_tps_map[C])
+        elif measured_k:
+            # fitted model TPS ~= k / (C + eps)
+            eps = 1.0
+            tps = float(measured_k / (C + eps))
+        else:
+            tps = _estimate_tps(C, n_layers, config.hidden_size, config.bytes_per_element, bw_gbps, beta=beta)
+
+        # usefulness per token (diminishing returns). Simpler: normalized 1/(1 + C/c_ref)
+        usefulness = 1.0 / (1.0 + (C / max(1, c_ref)))
+
+        mem_margin = 1.0 - min(1.0, vram_used / max(1e-6, usable_vram))
+
+        score = tps * usefulness * (mem_margin ** memory_penalty_pow)
+
+        candidates.append({
+            "context": C,
+            "vram_used_mb": vram_used,
+            "tps": tps,
+            "usefulness": usefulness,
+            "mem_margin": mem_margin,
+            "score": score,
+        })
+
+    if not candidates:
+        return {
+            "chosen": 0,
+            "bw_gbps": bw_gbps,
+            "candidates": [],
+            "reason": "no feasible context fits memory constraints",
+        }
+
+    # pick top by score
+    best = max(candidates, key=lambda x: x["score"])
+
+    return {
+        "chosen": int(best["context"]),
+        "bw_gbps": float(bw_gbps),
+        "tps": float(best["tps"]),
+        "score": float(best["score"]),
+        "candidates": candidates,
+    }
 
 
 def calculate_max_context(

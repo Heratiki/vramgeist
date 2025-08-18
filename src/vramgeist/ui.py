@@ -15,10 +15,12 @@ from .calc import (
     calculate_max_context,
     calculate_vram_usage,
     calculate_ram_usage,
+    calculate_semantic_throughput_best_context,
 )
 from .hw import get_gpu_memory, get_system_memory
 from .gguf import estimate_model_size_mb, read_gguf_metadata
 from .config import VRAMConfig, DEFAULT_CONFIG
+from .bench.llama_bench import measure_tokens_per_second, fit_k_from_measurements
 
 console = Console(force_terminal=True, width=120)
 
@@ -167,6 +169,12 @@ def analyze_gguf_file_with_config(
     vram_override: Optional[int] = None,
     ram_override: Optional[int] = None,
     force_detect: bool = False,
+    optimize_for: str = "throughput",
+    gpu_bandwidth_gbps: Optional[float] = None,
+    measure_bandwidth: bool = False,
+    measure_tps: bool = False,
+    llama_bin: Optional[str] = None,
+    bench_contexts: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Analyze a GGUF file and return structured results"""
     model_name = os.path.basename(filepath)
@@ -204,10 +212,57 @@ def analyze_gguf_file_with_config(
     best_gpu_layers = 0
     best_context = 0
     
+    # If requested, run token/sec benchmark once per model (before per-gpu_layers loop)
+    measured_map: Optional[dict] = None
+    measured_k: Optional[float] = None
+    if measure_tps:
+        # measure_tokens_per_second uses python binding first then binary fallback
+        try:
+            contexts = [1024, 4096, 8192]
+            if bench_contexts:
+                try:
+                    contexts = [int(x.strip()) for x in bench_contexts.split(",") if x.strip()]
+                except Exception:
+                    contexts = [1024, 4096, 8192]
+
+            measured_map = measure_tokens_per_second(
+                filepath,
+                contexts=contexts,
+                n_predict=128,
+                runs=2,
+                warmup=1,
+                timeout=60.0,
+                use_python_binding=True,
+                llama_bin=llama_bin,
+            )
+            if measured_map:
+                measured_k = fit_k_from_measurements(measured_map, eps=1.0)
+        except Exception:
+            measured_map = None
+            measured_k = None
+
     for gpu_layers in [0, n_layers//4, n_layers//2, 3*n_layers//4, n_layers]:
-        max_ctx = calculate_max_context(model_size_mb, n_layers, gpu_layers, available_vram, available_ram, config)
-        vram_used = calculate_vram_usage(model_size_mb, n_layers, gpu_layers, max_ctx, config)
-        ram_used = calculate_ram_usage(model_size_mb, n_layers, gpu_layers, max_ctx, config)
+        # If optimizing for throughput prefer semantic-throughput best context selection
+        if optimize_for == "throughput":
+            sem = calculate_semantic_throughput_best_context(
+                model_size_mb=model_size_mb,
+                n_layers=n_layers,
+                n_gpu_layers=gpu_layers,
+                available_vram_mb=available_vram,
+                available_ram_mb=available_ram,
+                config=config,
+                bw_gbps=gpu_bandwidth_gbps,
+                measured_bandwidth=measure_bandwidth,
+                measured_tps_map=measured_map,
+                measured_k=measured_k,
+            )
+            max_ctx = sem.get("chosen", 0)
+            vram_used = sem.get("vram_used_mb", calculate_vram_usage(model_size_mb, n_layers, gpu_layers, max_ctx, config))
+            ram_used = calculate_ram_usage(model_size_mb, n_layers, gpu_layers, max_ctx, config)
+        else:
+            max_ctx = calculate_max_context(model_size_mb, n_layers, gpu_layers, available_vram, available_ram, config)
+            vram_used = calculate_vram_usage(model_size_mb, n_layers, gpu_layers, max_ctx, config)
+            ram_used = calculate_ram_usage(model_size_mb, n_layers, gpu_layers, max_ctx, config)
         
         # Track best option
         if max_ctx > best_context:
@@ -278,6 +333,12 @@ def process_gguf_file(
     vram_override: Optional[int] = None,
     ram_override: Optional[int] = None,
     force_detect: bool = False,
+    optimize_for: str = "throughput",
+    gpu_bandwidth_gbps: Optional[float] = None,
+    measure_bandwidth: bool = False,
+    measure_tps: bool = False,
+    llama_bin: Optional[str] = None,
+    bench_contexts: Optional[str] = None,
 ) -> None:
     """Process a single GGUF file and display analysis"""
     if json_output:
@@ -306,7 +367,19 @@ def process_gguf_file(
     console.print("[bold blue]Calculating optimal settings...[/bold blue]")
     
     # Get analysis results
-    analysis_result = analyze_gguf_file_with_config(filepath, config, vram_override, ram_override, force_detect)
+    analysis_result = analyze_gguf_file_with_config(
+        filepath,
+        config,
+        vram_override,
+        ram_override,
+        force_detect,
+        optimize_for=optimize_for,
+        gpu_bandwidth_gbps=gpu_bandwidth_gbps,
+        measure_bandwidth=measure_bandwidth,
+        measure_tps=measure_tps,
+        llama_bin=llama_bin,
+        bench_contexts=bench_contexts,
+    )
     
     # Display model info
     model = analysis_result["model"]

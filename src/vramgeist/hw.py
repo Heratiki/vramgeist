@@ -427,3 +427,131 @@ def get_system_memory() -> Tuple[int, int]:
     except Exception as e:
         console.print(f"[yellow]Could not detect system RAM: {e}. Using defaults.[/yellow]")
         return 16384, 12288
+
+
+def get_gpu_name(timeout: float = 2.0) -> str | None:
+    """Return the GPU name string when available (NVIDIA via nvidia-smi)."""
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        if result.returncode == 0 and result.stdout:
+            lines = [l.strip() for l in result.stdout.splitlines() if l.strip()]
+            if lines:
+                # Return the first GPU name
+                return lines[0]
+    except Exception:
+        pass
+    return None
+
+
+# Small built-in lookup table for typical consumer / datacenter GPUs (approximate GB/s)
+_GPU_BANDWIDTH_LOOKUP = {
+    # NVIDIA Ampere / Ada examples (approximate)
+    "A100": 1555.0,
+    "RTX 4090": 1008.0,
+    "RTX 3090": 936.0,
+    "RTX 3080": 760.0,
+    "RTX 3080 Ti": 912.0,
+    "RTX 3070": 616.0,
+    "RTX 4060": 192.0,
+    "GTX 1080": 320.0,
+    # AMD examples (approximate)
+    "MI100": 1228.0,
+    "MI250": 2000.0,
+}
+
+
+def _lookup_bandwidth_by_name(name: str | None) -> float | None:
+    if not name:
+        return None
+    for key, bw in _GPU_BANDWIDTH_LOOKUP.items():
+        if key.lower() in name.lower():
+            return float(bw)
+    return None
+
+
+def measure_gpu_bandwidth_gbps(sample_bytes: int = 64 * 1024 * 1024) -> float | None:
+    """
+    Attempt a lightweight GPU memory bandwidth micro-benchmark using Cupy if available.
+    Returns GB/s or None if measurement not possible.
+    """
+    try:
+        import cupy as cp  # type: ignore
+    except Exception:
+        return None
+
+    try:
+        # allocate a buffer of sample_bytes on device
+        n = sample_bytes // 8  # float64
+        a = cp.ones(n, dtype=cp.float64)
+        cp.cuda.Stream.null.synchronize()
+
+        # warm-up
+        for _ in range(3):
+            b = a.copy()
+            cp.cuda.Stream.null.synchronize()
+
+        import time
+        runs = 5
+        t0 = time.perf_counter()
+        for _ in range(runs):
+            b = a.copy()
+        cp.cuda.Stream.null.synchronize()
+        t1 = time.perf_counter()
+
+        elapsed = t1 - t0
+        # bytes copied per run ~ sample_bytes
+        bytes_total = sample_bytes * runs
+        gbps = (bytes_total / elapsed) / 1e9
+        return float(gbps)
+    except Exception:
+        return None
+
+
+def get_gpu_bandwidth_gbps(
+    gpu_name: str | None = None,
+    measured: bool = False,
+    force_measure: bool = False,
+    available_vram_mb: int | None = None,
+    timeout: float = 2.0,
+) -> float:
+    """
+    Return an estimated GPU memory bandwidth in GB/s.
+
+    Logic:
+      1. If measured==True, attempt micro-benchmark (may require cupy).
+      2. Try lookup by GPU name.
+      3. Fallback heuristic based on VRAM size if provided.
+      4. Final conservative fallback of 64 GB/s.
+    """
+    # 1. Attempt measurement
+    if measured or force_measure:
+        bw = measure_gpu_bandwidth_gbps()
+        if bw is not None:
+            return bw
+
+    # 2. Try lookup by provided name or detected name
+    if gpu_name is None:
+        gpu_name = get_gpu_name(timeout=timeout)
+
+    bw_lookup = _lookup_bandwidth_by_name(gpu_name)
+    if bw_lookup:
+        return bw_lookup
+
+    # 3. Heuristic based on VRAM size
+    try:
+        if available_vram_mb:
+            # rule-of-thumb: ~80 GB/s per GB of HBM/GDDR capacity for rough guess
+            # clamp to [20, 2000]
+            guess = (available_vram_mb / 1024) * 80
+            guess = max(20.0, min(guess, 2000.0))
+            return float(guess)
+    except Exception:
+        pass
+
+    # 4. Conservative fallback
+    return 64.0

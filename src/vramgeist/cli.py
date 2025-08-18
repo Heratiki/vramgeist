@@ -113,6 +113,44 @@ Examples:
         action="store_true",
         help="Force re-running hardware detection probes (bypass any caching)"
     )
+
+    parser.add_argument(
+        "--optimize-for",
+        choices=["throughput", "latency"],
+        default="throughput",
+        help="Optimize recommendations for throughput (tokens/sec) or latency (time-to-first-token). Default: throughput",
+    )
+
+    parser.add_argument(
+        "--gpu-bandwidth-gbps",
+        type=float,
+        help="Override GPU memory bandwidth detection in GB/s (optional)",
+    )
+
+    parser.add_argument(
+        "--measure-bandwidth",
+        action="store_true",
+        help="Attempt a lightweight GPU memory bandwidth micro-benchmark (may require cupy).",
+    )
+
+    parser.add_argument(
+        "--measure-tps",
+        action="store_true",
+        help="Attempt a small llama.cpp/llama-cpp-python inference micro-benchmark to measure tokens/sec.",
+    )
+
+    parser.add_argument(
+        "--llama-bin",
+        type=str,
+        help="Path to llama.cpp binary to use as fallback for TPS measurement",
+    )
+
+    parser.add_argument(
+        "--bench-contexts",
+        type=str,
+        default="1024,4096,8192",
+        help="Comma-separated context sizes to sample for TPS measurement (default: 1024,4096,8192)",
+    )
     
     return parser
 
@@ -214,7 +252,20 @@ def main() -> int:
             if not path.exists():
                 console.print(f"[red]Error: File '{path}' not found[/red]")
                 continue
-            process_gguf_file(str(path), config, args.json, args.vram_mb, args.ram_mb, args.force_detect)
+            process_gguf_file(
+                str(path),
+                config,
+                args.json,
+                args.vram_mb,
+                args.ram_mb,
+                args.force_detect,
+                optimize_for=args.optimize_for,
+                gpu_bandwidth_gbps=args.gpu_bandwidth_gbps,
+                measure_bandwidth=args.measure_bandwidth,
+                measure_tps=args.measure_tps,
+                llama_bin=args.llama_bin,
+                bench_contexts=args.bench_contexts,
+            )
             total_files_processed += 1
 
         elif path.is_dir():
@@ -230,8 +281,21 @@ def main() -> int:
                     box=box.ROUNDED
                 ))
 
-            for gguf_file in sorted(gguf_files):
-                process_gguf_file(str(gguf_file), config, args.json, args.vram_mb, args.ram_mb, args.force_detect)
+                for gguf_file in sorted(gguf_files):
+                    process_gguf_file(
+                        str(gguf_file),
+                        config,
+                        args.json,
+                        args.vram_mb,
+                        args.ram_mb,
+                        args.force_detect,
+                        optimize_for=args.optimize_for,
+                        gpu_bandwidth_gbps=args.gpu_bandwidth_gbps,
+                        measure_bandwidth=args.measure_bandwidth,
+                        measure_tps=args.measure_tps,
+                        llama_bin=args.llama_bin,
+                        bench_contexts=args.bench_contexts,
+                    )
                 total_files_processed += 1
 
         else:
@@ -249,7 +313,20 @@ def main() -> int:
 
                 for gguf_file in sorted(gguf_matches):
                     if os.path.exists(gguf_file):
-                        process_gguf_file(gguf_file, config, args.json, args.vram_mb, args.ram_mb, args.force_detect)
+                        process_gguf_file(
+                            gguf_file,
+                            config,
+                            args.json,
+                            args.vram_mb,
+                            args.ram_mb,
+                            args.force_detect,
+                            optimize_for=args.optimize_for,
+                            gpu_bandwidth_gbps=args.gpu_bandwidth_gbps,
+                            measure_bandwidth=args.measure_bandwidth,
+                            measure_tps=args.measure_tps,
+                            llama_bin=args.llama_bin,
+                            bench_contexts=args.bench_contexts,
+                        )
                         total_files_processed += 1
             else:
                 console.print(f"[red]Error: '{path}' is not a valid GGUF file, directory, or pattern[/red]")

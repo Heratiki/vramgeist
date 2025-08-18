@@ -238,8 +238,14 @@ def analyze_gguf_file_with_config(
                 use_python_binding=True,
                 llama_bin=llama_bin,
             )
-            if measured_map:
+            # Bench helper may return a rich structure {"map": {...}, "details": {...}}
+            if measured_map and isinstance(measured_map, dict) and "map" in measured_map:
                 measured_k = fit_k_from_measurements(measured_map, eps=1.0)
+                # extract the simple map for downstream calculations
+                measured_map = measured_map.get("map", {})
+            else:
+                if measured_map:
+                    measured_k = fit_k_from_measurements(measured_map, eps=1.0)
         except Exception:
             measured_map = None
             measured_k = None

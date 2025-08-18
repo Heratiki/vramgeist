@@ -41,7 +41,7 @@ def test_ui_invokes_bench(monkeypatch, tmp_path):
     def fake_measure_tokens_per_second(model_path, contexts, **kwargs):
         called["flag"] = True
         # return a simple mapping
-        return {1024: 100.0, 4096: 40.0}
+    return {"map": {1024: 100.0, 4096: 40.0}, "details": {}}
 
     # Patch the symbol imported into the UI module (analyze_gguf_file_with_config imports it)
     monkeypatch.setattr("src.vramgeist.ui.measure_tokens_per_second", fake_measure_tokens_per_second)

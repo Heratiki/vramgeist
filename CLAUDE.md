@@ -71,6 +71,7 @@ src/vramgeist/
 ├── calc.py         # VRAM/RAM calculation algorithms
 ├── ui.py           # Rich-based terminal UI and analysis display
 ├── tui/            # Textual-based terminal UI components
+├── bench/          # Optional benchmarking modules (llama_bench.py)
 ├── __init__.py     # Package exports
 └── __main__.py     # Module entry point
 ```
@@ -82,6 +83,7 @@ src/vramgeist/
 - **Configuration** (`config.py`): Profiles (default, conservative, aggressive) and parameter management
 - **UI Layer** (`ui.py`): Rich-based terminal interface with live updates and tables
 - **CLI Interface** (`cli.py`): Argument parsing, file discovery, and orchestration
+- **TUI Components** (`tui/`): Interactive file browser using Textual framework
 
 ### Core Algorithm
 ```
@@ -159,5 +161,46 @@ Tests are organized in `tests/` directory:
 - `test_cli_no_args.py`: CLI behavior and environment variable tests
 - `test_gguf.py`: GGUF file parsing tests with edge cases
 - `test_hw.py`: Hardware detection fallback tests
+- `test_bench_*.py`: Benchmarking functionality tests
+- `test_rich_fallback*.py`: Rich library fallback tests
 
 Run tests with: `uv run pytest`
+
+### Test Execution Options
+```bash
+# Run all tests
+uv run pytest
+
+# Run specific test file
+uv run pytest tests/test_calc.py
+
+# Run with verbose output
+uv run pytest -v
+
+# Run tests matching pattern
+uv run pytest -k "test_vram"
+
+# Run with coverage
+uv run pytest --cov=src/vramgeist
+```
+
+## Environment Variables for Automation
+
+- **VRAMGEIST_BROWSE_AUTOPATH**: Skip interactive browser and use specified path
+- **VRAMGEIST_BROWSE_CANCEL=1**: Simulate cancel/exit behavior for testing
+
+## Benchmarking Features
+
+Optional TPS (tokens-per-second) benchmarking via `bench/llama_bench.py`:
+- Uses llama-cpp-python binding when available
+- Subprocess fallback to llama.cpp binary
+- CLI flags: `--measure-tps`, `--llama-bin PATH`, `--bench-contexts`
+- JSON output includes benchmark results
+
+## Development Patterns
+
+- **Pure Functions**: Keep calculation logic in `calc.py` as pure functions
+- **Defensive Parsing**: Always provide fallbacks for missing metadata
+- **Hardware Detection**: Use multiple detection methods with graceful fallbacks
+- **Environment Overrides**: Support `--vram-mb`/`--ram-gb` for deterministic testing
+- **Exit Codes**: Interactive cancel uses 130; other errors surface exceptions

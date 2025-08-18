@@ -555,3 +555,136 @@ def get_gpu_bandwidth_gbps(
 
     # 4. Conservative fallback
     return 64.0
+
+
+def estimate_free_vram_bytes(
+    mode: str = "auto",
+    free_vram_override: int | None = None,
+    probes: list | None = None,
+    reserved_mb_default: int = 1536,
+) -> tuple[int, str, float]:
+    """
+    Return an estimate of free VRAM in BYTES, not total VRAM.
+
+    Flow:
+      - If free_vram_override provided, use it (in MB) and return bytes.
+      - Try probe chain (get_gpu_memory()). If the probe returns a total VRAM value
+        (MB) we still treat this as a total guess and prefer heuristic when possible.
+      - If probe yields a direct free-VRAM probe via `probes` callbacks, use first non-None.
+      - Otherwise fall back to a heuristic based on OS and display overheads.
+
+    Returns: (free_bytes, basis, safety_used)
+    basis is one of "probe" or "heuristic".
+    """
+    # If user explicitly provided free_vram override (MB)
+    if free_vram_override is not None:
+        free_bytes = int(free_vram_override) * 1024 ** 2
+        return free_bytes, "probe", 1.0
+
+    # user-supplied probe callbacks take precedence
+    if probes:
+        for p in probes:
+            try:
+                val = p()
+                if val:
+                    # Expect probe to return free MB. If it returns total, caller may have to interpret.
+                    free_bytes = int(val) * 1024 ** 2
+                    return free_bytes, "probe", 1.0
+            except Exception:
+                continue
+
+    # Try existing probe chain for total VRAM. If it returns >0 it's a total (not free) value.
+    try:
+        total_mb = get_gpu_memory()
+    except Exception:
+        total_mb = 0
+
+    # If probe gave no reliable total, or mode requests heuristic, use heuristic
+    if total_mb <= 0 or mode == "heuristic":
+        # Heuristic fallback depending on platform
+        system = platform.system()
+        # detect number of displays (best-effort)
+        display_overhead_mb = 0
+        try:
+            # attempt to detect monitors via screeninfo if available
+            import importlib
+            screeninfo = importlib.import_module("screeninfo")
+            monitors = screeninfo.get_monitors()
+            for m in monitors:
+                # approximate by width
+                w = getattr(m, "width", 0)
+                h = getattr(m, "height", 0)
+                if w >= 5120 or h >= 2880:
+                    display_overhead_mb += 600
+                elif w >= 3840 or h >= 2160:
+                    display_overhead_mb += 350
+                elif w >= 2560 or h >= 1440:
+                    display_overhead_mb += 250
+                else:
+                    display_overhead_mb += 150
+        except Exception:
+            # If we can't read displays, assume 0 overhead
+            display_overhead_mb = 0
+
+        # default heuristics
+        if system == "Windows":
+            fixed = 1536
+            percent = 0.08
+            safety = 0.80
+        elif system == "Linux":
+            # headless detection via DISPLAY env
+            if os.environ.get("DISPLAY"):
+                fixed = 512
+                percent = 0.05
+                safety = 0.88
+            else:
+                fixed = 256
+                percent = 0.02
+                safety = 0.92
+        elif system == "Darwin":
+            # Mac: unified memory - be conservative
+            fixed = 512
+            percent = 0.05
+            safety = 0.88
+        else:
+            fixed = 512
+            percent = 0.05
+            safety = 0.88
+
+        # If we have a total_mb from probe, use that to compute free guess; otherwise assume 8GB total
+        total_mb = total_mb or 8192
+
+        unknown_guard_mb = int(total_mb * 0.10)
+        free_guess_mb = int(total_mb - max(fixed, int(total_mb * percent)) - display_overhead_mb - unknown_guard_mb)
+        free_bytes = max(0, free_guess_mb) * 1024 ** 2
+        return free_bytes, "heuristic", float(safety)
+
+    # If probe returned a total MB > 0, we don't know free exactly — fall back to heuristic path
+    # Use heuristic to estimate free from total
+    total_mb = total_mb or 8192
+    # reuse heuristic path with available total
+    # choose same heuristics as above
+    system = platform.system()
+    if system == "Windows":
+        fixed = 1536
+        percent = 0.08
+        safety = 0.80
+    elif system == "Linux":
+        if os.environ.get("DISPLAY"):
+            fixed = 512
+            percent = 0.05
+            safety = 0.88
+        else:
+            fixed = 256
+            percent = 0.02
+            safety = 0.92
+    else:
+        fixed = 512
+        percent = 0.05
+        safety = 0.88
+
+    display_overhead_mb = 0
+    unknown_guard_mb = int(total_mb * 0.10)
+    free_guess_mb = int(total_mb - max(fixed, int(total_mb * percent)) - display_overhead_mb - unknown_guard_mb)
+    free_bytes = max(0, free_guess_mb) * 1024 ** 2
+    return free_bytes, "heuristic", float(safety)

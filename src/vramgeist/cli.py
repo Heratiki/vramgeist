@@ -116,7 +116,7 @@ Examples:
 
     parser.add_argument(
         "--optimize-for",
-        choices=["throughput", "latency"],
+    choices=["throughput", "latency", "memory"],
         default="throughput",
         help="Optimize recommendations for throughput (tokens/sec) or latency (time-to-first-token). Default: throughput",
     )
@@ -137,6 +137,12 @@ Examples:
         "--measure-tps",
         action="store_true",
         help="Attempt a small llama.cpp/llama-cpp-python inference micro-benchmark to measure tokens/sec.",
+    )
+
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug diagnostics in recommendation payloads",
     )
 
     parser.add_argument(
@@ -265,6 +271,7 @@ def main() -> int:
                 measure_tps=args.measure_tps,
                 llama_bin=args.llama_bin,
                 bench_contexts=args.bench_contexts,
+                debug=args.debug,
             )
             total_files_processed += 1
 
@@ -295,6 +302,7 @@ def main() -> int:
                         measure_tps=args.measure_tps,
                         llama_bin=args.llama_bin,
                         bench_contexts=args.bench_contexts,
+                            debug=args.debug,
                     )
                 total_files_processed += 1
 
@@ -326,6 +334,7 @@ def main() -> int:
                             measure_tps=args.measure_tps,
                             llama_bin=args.llama_bin,
                             bench_contexts=args.bench_contexts,
+                                debug=args.debug,
                         )
                         total_files_processed += 1
             else:

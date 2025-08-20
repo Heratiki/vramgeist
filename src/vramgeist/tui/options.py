@@ -13,3 +13,7 @@ class TUIOptions:
     start_in_preview: bool = False
     optimize_for: str = "throughput"  # "throughput" or "memory"
     debug: bool = False
+    # Validation settings
+    validate_settings: bool = False
+    llama_bin: str | None = None
+    validation_timeout: float = 30.0

@@ -90,7 +90,13 @@ class VramgeistAppBase:
             def compose(self) -> ComposeResult:
                 yield Header(show_clock=False, name="vramgeist (experimental TUI)")
                 # Add settings display
-                settings_text = f"Mode: {self._state.options.optimize_for.upper()} | Debug: {'ON' if self._state.options.debug else 'OFF'} | Press 'm' to toggle mode, 'd' to toggle debug"
+                validation_status = ""
+                if self._state.can_validate():
+                    validation_status = f" | Validation: {'ON' if self._state.options.validate_settings else 'OFF'}"
+                else:
+                    validation_status = " | Validation: UNAVAILABLE"
+                
+                settings_text = f"Mode: {self._state.options.optimize_for.upper()} | Debug: {'ON' if self._state.options.debug else 'OFF'}{validation_status} | Keys: 'm'=mode, 'd'=debug, 'v'=validate"
                 yield Static(settings_text, id="settings", classes="settings")
                 with Vertical(id="body") as body:
                     for line in self._lines():
@@ -143,9 +149,11 @@ class VramgeistAppBase:
                             gpu_bandwidth_gbps=None,
                             measure_bandwidth=False,
                             measure_tps=False,
-                            llama_bin=None,
+                            llama_bin=self._state.options.llama_bin,
                             bench_contexts=None,
                             debug=self._state.options.debug,
+                            validate_settings=self._state.options.validate_settings,
+                            validation_timeout=self._state.options.validation_timeout,
                         )
                     
                     result = await loop.run_in_executor(self._executor, analyze_with_current_options, path)
@@ -162,7 +170,13 @@ class VramgeistAppBase:
 
             def _refresh_settings(self) -> None:
                 """Update the settings display"""
-                settings_text = f"Mode: {self._state.options.optimize_for.upper()} | Debug: {'ON' if self._state.options.debug else 'OFF'} | Press 'm' to toggle mode, 'd' to toggle debug"
+                validation_status = ""
+                if self._state.can_validate():
+                    validation_status = f" | Validation: {'ON' if self._state.options.validate_settings else 'OFF'}"
+                else:
+                    validation_status = " | Validation: UNAVAILABLE"
+                
+                settings_text = f"Mode: {self._state.options.optimize_for.upper()} | Debug: {'ON' if self._state.options.debug else 'OFF'}{validation_status} | Keys: 'm'=mode, 'd'=debug, 'v'=validate"
                 settings_widget = self.query_one("#settings")
                 settings_widget.update(settings_text)
 
@@ -197,6 +211,17 @@ class VramgeistAppBase:
                     self._refresh_list()
                     # Re-trigger analysis for all files
                     await self._spawn_analysis_tasks()
+                # Toggle validation mode: 'v'
+                elif event.key == "v":
+                    if self._state.can_validate():
+                        self._state.toggle_validation()
+                        self._refresh_settings()
+                        # Clear results to trigger re-analysis with new settings
+                        self._state.results_by_path.clear()
+                        self._state.errors_by_path.clear()
+                        self._refresh_list()
+                        # Re-trigger analysis for all files
+                        await self._spawn_analysis_tasks()
                 # Toggle hidden files: '.' or 'period'
                 elif event.key in (".", "period"):
                     if not hasattr(self._state, "show_hidden"):

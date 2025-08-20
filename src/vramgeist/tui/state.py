@@ -28,6 +28,15 @@ class TUIState:
         """Toggle debug mode on/off"""
         self.options.debug = not self.options.debug
 
+    def toggle_validation(self) -> None:
+        """Toggle validation on/off (only if llama_bin is available)"""
+        if self.options.llama_bin:
+            self.options.validate_settings = not self.options.validate_settings
+
+    def can_validate(self) -> bool:
+        """Check if validation is possible (llama_bin is configured)"""
+        return self.options.llama_bin is not None
+
     def select_next(self) -> None:
         if not self.files:
             return
@@ -44,8 +53,21 @@ class TUIState:
             return f"× {name}: {self.errors_by_path[path]}"
         if path in self.results_by_path:
             res = self.results_by_path[path]
-            model = res.get("model_name") or res.get("model") or "unknown"
-            ctx = res.get("max_context") or res.get("context_length") or "?"
-            gpu = res.get("recommended_gpu_layers") or res.get("gpu_layers") or "?"
-            return f"✓ {name}: model={model}, ctx={ctx}, gpu_layers={gpu}"
+            
+            # Extract basic info
+            model = res.get("model_name") or (res.get("model", {}).get("name") if isinstance(res.get("model"), dict) else "unknown")
+            rec = res.get("recommendation", {})
+            ctx = rec.get("max_context", "?")
+            gpu = rec.get("gpu_layers", "?")
+            
+            # Add validation indicator
+            validation_icon = ""
+            if res.get("validation"):
+                validation_info = res["validation"]
+                if validation_info.get("validated"):
+                    validation_icon = "🔒"  # Verified/validated
+                else:
+                    validation_icon = "⚠️"   # Validation failed
+            
+            return f"✓ {name}{validation_icon}: ctx={ctx}, gpu={gpu}"
         return f"⏳ Analyzing: {name}"

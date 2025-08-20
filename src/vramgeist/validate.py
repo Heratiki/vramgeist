@@ -107,10 +107,24 @@ def validate_llama_cpp_settings(
             if result.stdout and len(result.stdout.strip()) > 0:
                 # Generated some output - this indicates successful loading and generation
                 details["generated_text_length"] = len(result.stdout.strip())
+                
+                # Save successful llama.cpp path for future use
+                try:
+                    from .config_persist import save_llama_bin_path
+                    save_llama_bin_path(llama_bin)
+                except ImportError:
+                    pass  # Config persistence not available
+                
                 return True, "Validation successful: model loaded and generated text", details
             else:
                 # Check stderr for successful loading indicators even if no stdout
                 if result.stderr and ("model params" in result.stderr.lower() or "llama" in result.stderr.lower()):
+                    # Also save path for successful loading even without generation
+                    try:
+                        from .config_persist import save_llama_bin_path
+                        save_llama_bin_path(llama_bin)
+                    except ImportError:
+                        pass
                     return True, "Validation successful: model loaded (no text generation detected)", details
                 return False, "Model loaded but failed to generate expected output", details
         

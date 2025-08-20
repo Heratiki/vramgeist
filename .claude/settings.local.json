@@ -10,7 +10,14 @@
       "Bash(\"C:\\Tools\\llama-b6210\\llama-cli.exe\" --help)",
       "Bash(\"C:\\Tools\\llama-b6210\\llama-cli.exe\" -m \"C:\\Users\\herat\\.lmstudio\\models\\eramax\\Magicoder-S-CL-7B-gguf\\Magicoder-S-CL-7B-Q5_K_M.gguf\" -p \"Hello Hello Hello\" -n 5 --no-display-prompt)",
       "Bash(\"C:\\Tools\\llama-b6210\\llama-cli.exe\" -m \"C:\\Users\\herat\\.lmstudio\\models\\DavidAU\\L3.2-Rogue-Creative-Instruct-Uncensored-Abliterated-7B-GGUF\\L3.2-Rogue-Creative-Instruct-Uncensored-Abliterated-7B-D_AU-Q4_k_s.gguf\" -p \"Hello\" -n 5 --no-display-prompt -c 1024)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(python test:*)",
+      "mcp__ide__getDiagnostics",
+      "Bash(python:*)",
+      "Bash(find:*)",
+      "Bash(VRAMGEIST_BROWSE_CANCEL=1 uv run vramgeist)",
+      "Bash(set VRAMGEIST_BROWSE_CANCEL=1)",
+      "Bash(rm:*)"
     ],
     "deny": []
   }

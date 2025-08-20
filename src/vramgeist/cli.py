@@ -2,6 +2,9 @@ from pathlib import Path
 import os
 import sys
 import argparse
+from dataclasses import dataclass
+from typing import Optional
+from glob import glob
 from ._rich_fallback import Console, Panel, box
 
 # Import from modular architecture
@@ -183,6 +186,18 @@ Examples:
         default=30.0,
         help="Timeout in seconds for validation tests (default: 30.0)",
     )
+
+    parser.add_argument(
+        "--show-config",
+        action="store_true",
+        help="Show saved configuration and exit",
+    )
+
+    parser.add_argument(
+        "--clear-config",
+        action="store_true",
+        help="Clear saved configuration and exit",
+    )
     
     return parser
 
@@ -209,14 +224,13 @@ def _maybe_env_browse_bypass() -> tuple[int, str | None] | None:
     return None
 
 
-def _run_interactive_browser() -> None:
+def _run_interactive_tui(args) -> None:
     """
-    Invoke the Textual-based file browser from cwd, allowing both files and dirs.
-    Prints the selected absolute path and exits with code 0.
-    If canceled, exits with code 130 and prints nothing.
+    Run the full interactive TUI with analysis and validation controls.
     """
     try:
-        from .tui.file_browser import browse_files
+        from .tui.app import run_tui
+        from .tui.options import TUIOptions
     except ImportError:
         msg = (
             "Interactive mode requires Textual TUI dependencies.\n"
@@ -226,14 +240,18 @@ def _run_interactive_browser() -> None:
         console.print(f"[red]{msg}[/red]")
         sys.exit(2)
 
-    selected = browse_files(start_dir=Path.cwd(), select_files=True, select_dirs=True)
+    # Create TUI options from CLI args
+    options = TUIOptions(
+        optimize_for=args.optimize_for,
+        debug=args.debug,
+        validate_settings=args.validate_settings,
+        llama_bin=args.llama_bin,
+        validation_timeout=args.validation_timeout,
+    )
     
-    if selected is None:
-        # Cancel
-        sys.exit(130)
-    else:
-        print(str(selected), end="")
-        sys.exit(0)
+    # Run the integrated TUI (no paths = file browser + analysis)
+    exit_code = run_tui(paths=[], options=options)
+    sys.exit(exit_code)
 
 
 def main() -> int:
@@ -247,12 +265,61 @@ def main() -> int:
                 sys.stdout.write(out)
                 sys.stdout.flush()
             sys.exit(code)
-        _run_interactive_browser()
+        # Create minimal args object for TUI
+        @dataclass
+        class MinimalArgs:
+            optimize_for: str = "balanced"
+            debug: bool = False
+            validate_settings: bool = False
+            llama_bin: Optional[str] = None
+            validation_timeout: float = 30.0
+        
+        args = MinimalArgs()
+        
+        # Auto-load saved llama.cpp path if available
+        try:
+            from .config_persist import get_llama_bin_path
+            saved_llama_bin = get_llama_bin_path()
+            if saved_llama_bin:
+                args.llama_bin = saved_llama_bin
+                args.validate_settings = True  # Enable validation if we have llama.cpp
+        except ImportError:
+            pass
+            
+        _run_interactive_tui(args)
         return 0
 
     parser = create_parser()
 
     args = parser.parse_args()
+    
+    # Handle config management commands first
+    if args.show_config:
+        try:
+            from .config_persist import get_config_summary
+            summary = get_config_summary()
+            console.print("[bold blue]VRAMGeist Configuration:[/bold blue]")
+            console.print(f"Config file: [cyan]{summary['config_file']}[/cyan]")
+            console.print(f"Config exists: [{'green' if summary['config_exists'] else 'yellow'}]{summary['config_exists']}[/{'green' if summary['config_exists'] else 'yellow'}]")
+            console.print(f"Has llama.cpp binary: [{'green' if summary['has_llama_bin'] else 'yellow'}]{summary['has_llama_bin']}[/{'green' if summary['has_llama_bin'] else 'yellow'}]")
+            if summary['llama_bin_path']:
+                console.print(f"llama.cpp path: [cyan]{summary['llama_bin_path']}[/cyan]")
+            console.print(f"Validation timeout: [cyan]{summary['validation_timeout']}s[/cyan]")
+            return 0
+        except ImportError:
+            console.print("[red]Configuration persistence not available[/red]")
+            return 1
+    
+    if args.clear_config:
+        try:
+            from .config_persist import clear_llama_bin_path, get_config_file
+            clear_llama_bin_path()
+            console.print("[green]Cleared saved configuration[/green]")
+            console.print(f"Config file: [dim]{get_config_file()}[/dim]")
+            return 0
+        except ImportError:
+            console.print("[red]Configuration persistence not available[/red]")
+            return 1
     
     # JSON mode should bypass TUI completely
     json_mode = bool(getattr(args, "json", False))
@@ -261,7 +328,19 @@ def main() -> int:
     config = VRAMConfig.from_profile(args.profile)
     config = config.update_from_args(args)
     
-    # If user invoked but provided zero paths after options (e.g. just flags), use Textual file browser
+    # Auto-load saved llama.cpp path if not explicitly provided
+    if not args.llama_bin and (args.validate_settings or args.measure_tps):
+        try:
+            from .config_persist import get_llama_bin_path
+            saved_llama_bin = get_llama_bin_path()
+            if saved_llama_bin:
+                args.llama_bin = saved_llama_bin
+                if not json_mode:
+                    console.print(f"[dim]Using saved llama.cpp binary: {saved_llama_bin}[/dim]")
+        except ImportError:
+            pass
+    
+    # If user invoked but provided zero paths after options (e.g. just flags), use full TUI
     if not args.paths:
         bypass = _maybe_env_browse_bypass()
         if bypass is not None:
@@ -270,7 +349,7 @@ def main() -> int:
                 sys.stdout.write(out)
                 sys.stdout.flush()
             sys.exit(code)
-        _run_interactive_browser()
+        _run_interactive_tui(args)
         return 0
 
     # Use Rich terminal UI for normal analysis processing
@@ -337,7 +416,6 @@ def main() -> int:
                 total_files_processed += 1
 
         else:
-            from glob import glob
             matches = glob(str(path))
             gguf_matches = [f for f in matches if f.lower().endswith(".gguf")]
 

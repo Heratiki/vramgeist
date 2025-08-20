@@ -80,17 +80,33 @@ def _estimate_tps(
     bytes_per_element: int,
     bw_gbps: float,
     beta: float = 2.0,
+    model_meta: Optional[dict] = None,
 ) -> float:
     """
-    Estimate tokens-per-second (sustained) using a conservative memory-bound per-token model.
+    Estimate tokens-per-second (sustained) using a KV-aware per-token model.
 
-    bytes_per_token ~ beta * n_layers * hidden_size * bytes_per_element * context_length
-    TPS = (BW_bytes_per_sec) / bytes_per_token
+    We compute bytes_per_token from a GQA/KV-aware formula (via _per_token_kv_bytes).
+    This avoids multiplying by the entire context length which previously over-penalized
+    larger contexts. If metadata is missing, fall back to a conservative per-token
+    estimate based on hidden size and layer count.
+
+    TPS = BW_bytes_per_sec / bytes_per_token
     """
     if context_length <= 0 or bw_gbps <= 0:
         return 0.0
 
-    bytes_per_token = beta * max(1, n_layers) * max(1, hidden_size) * bytes_per_element * max(1, context_length)
+    # Try to compute KV bytes per token from model metadata (preferred)
+    try:
+        per_token = _per_token_kv_bytes(model_meta or {"n_layers": n_layers, "hidden_size": hidden_size}, bytes_per_elem_override=bytes_per_element)
+    except Exception:
+        per_token = 0
+
+    # If we couldn't compute a sensible per-token KV size, fall back to a conservative heuristic
+    if not per_token or per_token <= 0:
+        # Use a heuristic per-token bytes: layers * hidden_size * bytes_per_element
+        per_token = max(1, n_layers) * max(1, hidden_size) * max(1, bytes_per_element)
+
+    bytes_per_token = float(beta) * float(per_token)
     bw_bps = bw_gbps * 1e9
     tps = bw_bps / bytes_per_token
     return float(tps)
@@ -231,7 +247,7 @@ def calculate_semantic_throughput_best_context(
     config: VRAMConfig = DEFAULT_CONFIG,
     bw_gbps: Optional[float] = None,
     measured_bandwidth: bool = False,
-    c_ref: int = 8192,
+    c_ref: int = 32768,
     beta: float = 2.0,
     memory_penalty_pow: float = 2.0,
     measured_tps_map: Optional[dict] = None,
@@ -253,6 +269,9 @@ def calculate_semantic_throughput_best_context(
         16384,
         32768,
         65536,
+        131072,
+        262144,
+        524288,
     ]
     model_meta = model_meta or {}
     opts = opts or {}
@@ -311,7 +330,12 @@ def calculate_semantic_throughput_best_context(
             eps = 1.0
             tps = float(measured_k / (C + eps))
         else:
-            tps = _estimate_tps(C, n_layers, config.hidden_size, config.bytes_per_element, bw_gbps, beta=beta)
+            # use model_meta if available for a more accurate per-token bytes estimate
+            try:
+                tps = _estimate_tps(C, n_layers, config.hidden_size, config.bytes_per_element, bw_gbps, beta=beta, model_meta=model_meta)
+            except TypeError:
+                # fallback for safety
+                tps = _estimate_tps(C, n_layers, config.hidden_size, config.bytes_per_element, bw_gbps, beta=beta)
 
         # usefulness per token (diminishing returns). Simpler: normalized 1/(1 + C/c_ref)
         usefulness = 1.0 / (1.0 + (C / max(1, c_ref)))

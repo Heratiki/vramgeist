@@ -116,9 +116,9 @@ Examples:
 
     parser.add_argument(
         "--optimize-for",
-    choices=["throughput", "latency", "memory"],
-        default="throughput",
-        help="Optimize recommendations for throughput (tokens/sec) or latency (time-to-first-token). Default: throughput",
+        choices=["throughput", "latency", "memory", "balanced"],
+        default="balanced",
+        help="Optimize recommendations for throughput (tokens/sec), latency (time-to-first-token), memory, or balanced (tradeoff). Default: balanced",
     )
 
     parser.add_argument(
@@ -143,6 +143,19 @@ Examples:
         "--debug",
         action="store_true",
         help="Enable debug diagnostics in recommendation payloads",
+    )
+
+    parser.add_argument(
+        "--balanced-weight",
+        type=float,
+        default=0.35,
+        help="When optimize-for=balanced, blend weight for context vs throughput (0..1). Higher favors context (default: 0.35)",
+    )
+
+    parser.add_argument(
+        "--rebench",
+        action="store_true",
+        help="Force re-running micro-benchmarks even if a cached result exists for this model",
     )
 
     parser.add_argument(

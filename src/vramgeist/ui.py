@@ -21,6 +21,9 @@ from .hw import get_gpu_memory, get_system_memory
 from .gguf import estimate_model_size_mb, read_gguf_metadata
 from .config import VRAMConfig, DEFAULT_CONFIG
 from .bench.llama_bench import measure_tokens_per_second, fit_k_from_measurements
+import hashlib
+import pathlib
+import pickle
 
 console = Console(force_terminal=True, width=120)
 
@@ -180,6 +183,8 @@ def analyze_gguf_file_with_config(
     llama_bin: Optional[str] = None,
     bench_contexts: Optional[str] = None,
     debug: bool = False,
+    balanced_weight: float = 0.35,
+    rebench: bool = False,
 ) -> Dict[str, Any]:
     """Analyze a GGUF file and return structured results"""
     model_name = os.path.basename(filepath)
@@ -235,39 +240,75 @@ def analyze_gguf_file_with_config(
 
             bench_contexts_list = contexts
 
-            measured_map = measure_tokens_per_second(
-                filepath,
-                contexts=contexts,
-                n_predict=128,
-                runs=2,
-                warmup=1,
-                timeout=60.0,
-                use_python_binding=True,
-                llama_bin=llama_bin,
-            )
-            # Bench helper may return a rich structure {"map": {...}, "details": {...}}
-            if measured_map and isinstance(measured_map, dict) and "map" in measured_map:
-                measured_k = fit_k_from_measurements(measured_map, eps=1.0)
-                # extract the simple map for downstream calculations
-                measured_map = measured_map.get("map", {})
-            else:
-                if measured_map:
+            # Persistent bench cache keyed by model file hash + bench contexts
+            try:
+                h = hashlib.sha256()
+                with open(filepath, "rb") as f:
+                    while True:
+                        chunk = f.read(8192)
+                        if not chunk:
+                            break
+                        h.update(chunk)
+                model_hash = h.hexdigest()
+            except Exception:
+                model_hash = None
+
+            cache_dir = pathlib.Path(os.path.expanduser("~")) / ".cache" / "vramgeist" / "bench"
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            cache_path = cache_dir / f"{model_hash}.pkl" if model_hash else None
+
+            if cache_path and cache_path.exists() and not rebench:
+                try:
+                    with open(cache_path, "rb") as cf:
+                        cached = pickle.load(cf)
+                        measured_map = cached.get("measured_map")
+                        measured_k = cached.get("measured_k")
+                except Exception:
+                    measured_map = None
+                    measured_k = None
+
+            if measured_map is None:
+                measured_map = measure_tokens_per_second(
+                    filepath,
+                    contexts=contexts,
+                    n_predict=128,
+                    runs=2,
+                    warmup=1,
+                    timeout=60.0,
+                    use_python_binding=True,
+                    llama_bin=llama_bin,
+                )
+                # Bench helper may return a rich structure {"map": {...}, "details": {...}}
+                if measured_map and isinstance(measured_map, dict) and "map" in measured_map:
                     measured_k = fit_k_from_measurements(measured_map, eps=1.0)
+                    # extract the simple map for downstream calculations
+                    measured_map = measured_map.get("map", {})
+                else:
+                    if measured_map:
+                        measured_k = fit_k_from_measurements(measured_map, eps=1.0)
+
+                # persist
+                if cache_path:
+                    try:
+                        with open(cache_path, "wb") as cf:
+                            pickle.dump({"measured_map": measured_map, "measured_k": measured_k}, cf)
+                    except Exception:
+                        pass
         except Exception:
             measured_map = None
             measured_k = None
 
     for gpu_layers in [0, n_layers//4, n_layers//2, 3*n_layers//4, n_layers]:
         sem = {}
-        # Two modes: throughput (semantic) or memory (pure memory-bound max_context)
-        if optimize_for == "throughput":
-            # build a small model_meta from metadata when available
-            model_meta = {}
-            for k in ("n_kv_heads", "head_dim", "kv_dtype", "weight_bytes_vram", "n_heads", "hidden_size"):
-                if metadata and k in metadata:
-                    model_meta[k] = metadata[k]
-            model_meta["n_layers"] = n_layers
+        # Two modes: throughput (semantic), memory (pure memory-bound), or balanced (tradeoff)
+        # build a small model_meta from metadata when available
+        model_meta = {}
+        for k in ("n_kv_heads", "head_dim", "kv_dtype", "weight_bytes_vram", "n_heads", "hidden_size"):
+            if metadata and k in metadata:
+                model_meta[k] = metadata[k]
+        model_meta["n_layers"] = n_layers
 
+        if optimize_for == "throughput":
             sem = calculate_semantic_throughput_best_context(
                 model_size_mb=model_size_mb,
                 n_layers=n_layers,
@@ -286,6 +327,7 @@ def analyze_gguf_file_with_config(
             # prefer vram_used declared in semantic result (when model_meta path used)
             vram_used = sem.get("vram_used_mb") if sem and isinstance(sem, dict) and sem.get("vram_used_mb") is not None else calculate_vram_usage(model_size_mb, n_layers, gpu_layers, max_ctx, config)
             ram_used = calculate_ram_usage(model_size_mb, n_layers, gpu_layers, max_ctx, config)
+
         elif optimize_for == "memory":
             # Pure memory-bound selection: maximize context that fits memory
             max_ctx = calculate_max_context(model_size_mb, n_layers, gpu_layers, available_vram, available_ram, config)
@@ -293,6 +335,84 @@ def analyze_gguf_file_with_config(
             ram_used = calculate_ram_usage(model_size_mb, n_layers, gpu_layers, max_ctx, config)
             # keep sem minimal so scoring code uses fallback path
             sem = {"chosen": max_ctx, "vram_used_mb": vram_used}
+
+        elif optimize_for == "balanced":
+            sem = calculate_semantic_throughput_best_context(
+                model_size_mb=model_size_mb,
+                n_layers=n_layers,
+                n_gpu_layers=gpu_layers,
+                available_vram_mb=available_vram,
+                available_ram_mb=available_ram,
+                config=config,
+                bw_gbps=gpu_bandwidth_gbps,
+                measured_bandwidth=measure_bandwidth,
+                measured_tps_map=measured_map,
+                measured_k=measured_k,
+                model_meta=model_meta,
+                opts={"debug": debug},
+            )
+
+            # Recompute max_ctx from semantic result but nudge toward larger contexts when memory margin allows.
+            max_ctx = sem.get("chosen", 0)
+            vram_used = sem.get("vram_used_mb") if sem and isinstance(sem, dict) and sem.get("vram_used_mb") is not None else calculate_vram_usage(model_size_mb, n_layers, gpu_layers, max_ctx, config)
+            ram_used = calculate_ram_usage(model_size_mb, n_layers, gpu_layers, max_ctx, config)
+
+            # If measured_map exists we will rescore candidates using a blended score
+            # But only if we have sufficient measured data points (at least 3)
+            if measured_map and len(measured_map) >= 3:
+                # Build candidate list (recompute common sizes to check)
+                common_sizes = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144]
+                # compute normalized TPS and context values
+                candidates = []
+                for C in common_sizes:
+                    vram_used_c = calculate_vram_usage(model_size_mb, n_layers, gpu_layers, C, config)
+                    if vram_used_c > available_vram * config.vram_safety_margin:
+                        continue
+                    # get measured tps when present, else skip
+                    tps_c = None
+                    if measured_map and C in measured_map:
+                        tps_c = float(measured_map[C])
+                    candidates.append((C, vram_used_c, tps_c))
+
+                # compute score normalization ranges
+                tps_values = [c[2] for c in candidates if c[2] is not None]
+                ctx_values = [c[0] for c in candidates]
+                if tps_values and ctx_values:
+                    tmin, tmax = min(tps_values), max(tps_values)
+                    cmin, cmax = min(ctx_values), max(ctx_values)
+                    best_local = None
+                    best_local_score = -1.0
+                    for C, vram_c, tps_c in candidates:
+                        # normalize
+                        tnorm = (tps_c - tmin) / (tmax - tmin) if (tmax - tmin) > 0 and tps_c is not None else 0.0
+                        cnorm = (C - cmin) / (cmax - cmin) if (cmax - cmin) > 0 else 0.0
+                        # blended score — balanced_weight favors context
+                        alpha = float(balanced_weight)
+                        blended = (1.0 - alpha) * tnorm + alpha * cnorm
+                        if blended > best_local_score:
+                            best_local_score = blended
+                            best_local = (C, vram_c)
+                    if best_local:
+                        max_ctx = best_local[0]
+                        vram_used = best_local[1]
+                        ram_used = calculate_ram_usage(model_size_mb, n_layers, gpu_layers, max_ctx, config)
+
+            # If there's plenty of VRAM margin, try bumping context up one step (choose next common size) to favor usefulness.
+            common_sizes = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144]
+            try:
+                idx = common_sizes.index(max_ctx) if max_ctx in common_sizes else None
+            except Exception:
+                idx = None
+            if idx is not None and idx + 1 < len(common_sizes):
+                candidate = common_sizes[idx + 1]
+                candidate_vram = calculate_vram_usage(model_size_mb, n_layers, gpu_layers, candidate, config)
+                # allow bump if VRAM stays under 92% of usable_vram
+                usable_vram_mb = available_vram * config.vram_safety_margin
+                if candidate_vram <= usable_vram_mb * 0.92:
+                    max_ctx = candidate
+                    vram_used = candidate_vram
+                    ram_used = calculate_ram_usage(model_size_mb, n_layers, gpu_layers, max_ctx, config)
+
         else:
             # fallback to previous behavior
             max_ctx = calculate_max_context(model_size_mb, n_layers, gpu_layers, available_vram, available_ram, config)

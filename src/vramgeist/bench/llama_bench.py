@@ -16,7 +16,10 @@ from typing import List, Dict, Optional, Tuple, Any
 
 def _make_repeated_prompt(token_word: str, approx_tokens: int) -> str:
     # Simple prompt with repeated short tokens; not perfect tokenization but fast and deterministic
-    return " ".join([token_word] * max(1, int(approx_tokens)))
+    # Cap the prompt length to avoid creating extremely long command lines on Windows.
+    # Bench accuracy does not require extremely long prompts; we only need some context.
+    capped = max(1, min(int(approx_tokens), 64))
+    return " ".join([token_word] * capped)
 
 
 def measure_tps_with_python_binding(
@@ -108,15 +111,48 @@ def measure_tps_with_binary(
     results_map: Dict[int, float] = {}
     details: Dict[int, Dict[str, Any]] = {}
 
+    # Try a few common invocation templates to support different llama.cpp-style binaries.
+    # We try them in order and accept the first template that appears to run successfully.
     for C in contexts:
         prompt = _make_repeated_prompt("Hello", C)
 
-        # Warmup
-        try:
-            for _ in range(warmup):
-                cmd = f'{shlex.quote(llama_bin)} -m {shlex.quote(model_path)} --n_predict {n_predict} --prompt {shlex.quote(prompt)}'
-                subprocess.run(cmd, shell=True, timeout=min(30.0, timeout))
-        except subprocess.SubprocessError:
+        # Candidate command templates. These cover common variants:
+        #  - template A: binary accepts -m <model> --n_predict <N> --prompt "..."
+        #  - template B: llama-run style: binary uses positional model and prompt, with --context-size and --ngl
+        #  - template C: binary accepts positional model then --prompt/--n_predict style
+        templates = [
+            # llama-cli modern flags (primary template - most reliable)
+            f'{shlex.quote(llama_bin)} -m {shlex.quote(model_path)} -p {shlex.quote(prompt)} -n {n_predict} --no-display-prompt -c {C}',
+            # llama-cli with long flags
+            f'{shlex.quote(llama_bin)} -m {shlex.quote(model_path)} --prompt {shlex.quote(prompt)} --n-predict {n_predict} --no-display-prompt',
+            # fallback: older style without --no-display-prompt
+            f'{shlex.quote(llama_bin)} -m {shlex.quote(model_path)} -p {shlex.quote(prompt)} -n {n_predict}',
+            # fallback: alternate flag names
+            f'{shlex.quote(llama_bin)} -m {shlex.quote(model_path)} --prompt {shlex.quote(prompt)} --predict {n_predict}',
+            # llama-run-style positional (for compatibility with older versions)
+            f'{shlex.quote(llama_bin)} --context-size {C} {shlex.quote(model_path)} {shlex.quote(prompt)}',
+        ]
+
+        successful_template = None
+        for tmpl in templates:
+            # Warmup attempts
+            try:
+                ok = True
+                for _ in range(warmup):
+                    result = subprocess.run(tmpl, shell=True, timeout=min(30.0, timeout), 
+                                          capture_output=True, text=True)
+                    if result.returncode != 0:
+                        ok = False
+                        break
+            except (subprocess.SubprocessError, subprocess.TimeoutExpired):
+                ok = False
+            if ok:
+                successful_template = tmpl
+                break
+
+        if not successful_template:
+            # No template worked for warmup; skip this context
+            details[C] = {"runs": [], "elapsed": None, "success": False}
             continue
 
         # timed runs with per-run durations
@@ -125,12 +161,15 @@ def measure_tps_with_binary(
         t_start = time.perf_counter()
         try:
             for _ in range(runs):
-                cmd = f'{shlex.quote(llama_bin)} -m {shlex.quote(model_path)} --n_predict {n_predict} --prompt {shlex.quote(prompt)}'
                 r0 = time.perf_counter()
-                subprocess.run(cmd, shell=True, timeout=timeout)
+                result = subprocess.run(successful_template, shell=True, timeout=timeout,
+                                      capture_output=True, text=True)
                 r1 = time.perf_counter()
+                if result.returncode != 0:
+                    success = False
+                    break
                 run_durations.append(r1 - r0)
-        except subprocess.SubprocessError:
+        except (subprocess.SubprocessError, subprocess.TimeoutExpired):
             success = False
 
         if not success or not run_durations:
@@ -170,9 +209,21 @@ def measure_tokens_per_second(
 
     for candidate in ("main", "main.exe"):
         path = shutil.which(candidate)
-        if path:
-            bins_to_try.append(path)
-            break
+        if not path:
+            continue
+        # On Windows, shutil.which may return non-executable system files (e.g., main.CPL).
+        # Require an actual .exe on Windows to avoid false positives.
+        try:
+            if os.name == "nt":
+                if not path.lower().endswith('.exe'):
+                    continue
+        except Exception:
+            pass
+        # Ensure the candidate is executable
+        if not os.access(path, os.X_OK):
+            continue
+        bins_to_try.append(path)
+        break
 
     # Try binaries first
     for b in bins_to_try:

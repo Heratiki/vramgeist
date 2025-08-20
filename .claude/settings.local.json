@@ -6,7 +6,11 @@
       "Bash(dir:*)",
       "Bash(uv run:*)",
       "Bash(mkdir:*)",
-      "Bash(uv sync:*)"
+      "Bash(uv sync:*)",
+      "Bash(\"C:\\Tools\\llama-b6210\\llama-cli.exe\" --help)",
+      "Bash(\"C:\\Tools\\llama-b6210\\llama-cli.exe\" -m \"C:\\Users\\herat\\.lmstudio\\models\\eramax\\Magicoder-S-CL-7B-gguf\\Magicoder-S-CL-7B-Q5_K_M.gguf\" -p \"Hello Hello Hello\" -n 5 --no-display-prompt)",
+      "Bash(\"C:\\Tools\\llama-b6210\\llama-cli.exe\" -m \"C:\\Users\\herat\\.lmstudio\\models\\DavidAU\\L3.2-Rogue-Creative-Instruct-Uncensored-Abliterated-7B-GGUF\\L3.2-Rogue-Creative-Instruct-Uncensored-Abliterated-7B-D_AU-Q4_k_s.gguf\" -p \"Hello\" -n 5 --no-display-prompt -c 1024)",
+      "Bash(python3:*)"
     ],
     "deny": []
   }

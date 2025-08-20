@@ -17,6 +17,7 @@ from .calc import (
     calculate_ram_usage,
     calculate_semantic_throughput_best_context,
 )
+from .validate import validate_recommendation
 from .hw import get_gpu_memory, get_system_memory
 from .gguf import estimate_model_size_mb, read_gguf_metadata
 from .config import VRAMConfig, DEFAULT_CONFIG
@@ -185,6 +186,8 @@ def analyze_gguf_file_with_config(
     debug: bool = False,
     balanced_weight: float = 0.35,
     rebench: bool = False,
+    validate_settings: bool = False,
+    validation_timeout: float = 30.0,
 ) -> Dict[str, Any]:
     """Analyze a GGUF file and return structured results"""
     model_name = os.path.basename(filepath)
@@ -473,6 +476,24 @@ def analyze_gguf_file_with_config(
     if expected_ram > available_ram * 0.8:
         warnings.append("RAM usage is high. May cause system slowdowns.")
     
+    # Run validation if requested
+    validation_result = None
+    if validate_settings and llama_bin:
+        validation_result = validate_recommendation(
+            model_path=filepath,
+            recommended_gpu_layers=best_gpu_layers,
+            recommended_context=best_context,
+            llama_bin=llama_bin
+        )
+        
+        # Add validation warnings to main warnings
+        if validation_result and not validation_result.get("validated", False):
+            warnings.append(f"⚠️  Validation failed: {validation_result.get('reason', 'Unknown error')}")
+            for rec in validation_result.get("recommendations", []):
+                warnings.append(rec)
+    elif validate_settings and not llama_bin:
+        warnings.append("⚠️  Validation requested but no llama.cpp binary provided (use --llama-bin)")
+    
     return {
         "model": {
             "name": model_name,
@@ -499,6 +520,7 @@ def analyze_gguf_file_with_config(
             "expected_ram_mb": round(expected_ram, 1),
             "total_memory_mb": round(expected_vram + expected_ram, 1)
         },
+        "validation": validation_result,
         "warnings": warnings
     }
 
@@ -517,6 +539,8 @@ def process_gguf_file(
     llama_bin: Optional[str] = None,
     bench_contexts: Optional[str] = None,
     debug: bool = False,
+    validate_settings: bool = False,
+    validation_timeout: float = 30.0,
 ) -> None:
     """Process a single GGUF file and display analysis"""
     if json_output:
@@ -534,6 +558,8 @@ def process_gguf_file(
             llama_bin=llama_bin,
             bench_contexts=bench_contexts,
             debug=debug,
+            validate_settings=validate_settings,
+            validation_timeout=validation_timeout,
         )
         print(json.dumps(analysis_result, indent=2))
         return
@@ -570,7 +596,9 @@ def process_gguf_file(
         measure_tps=measure_tps,
         llama_bin=llama_bin,
         bench_contexts=bench_contexts,
-    debug=debug,
+        debug=debug,
+        validate_settings=validate_settings,
+        validation_timeout=validation_timeout,
     )
     
     # Display model info

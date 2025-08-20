@@ -170,6 +170,19 @@ Examples:
         default="1024,4096,8192",
         help="Comma-separated context sizes to sample for TPS measurement (default: 1024,4096,8192)",
     )
+
+    parser.add_argument(
+        "--validate-settings",
+        action="store_true",
+        help="Test recommended settings with actual llama.cpp inference to ensure they work",
+    )
+
+    parser.add_argument(
+        "--validation-timeout",
+        type=float,
+        default=30.0,
+        help="Timeout in seconds for validation tests (default: 30.0)",
+    )
     
     return parser
 
@@ -285,6 +298,8 @@ def main() -> int:
                 llama_bin=args.llama_bin,
                 bench_contexts=args.bench_contexts,
                 debug=args.debug,
+                validate_settings=args.validate_settings,
+                validation_timeout=args.validation_timeout,
             )
             total_files_processed += 1
 
@@ -315,7 +330,9 @@ def main() -> int:
                         measure_tps=args.measure_tps,
                         llama_bin=args.llama_bin,
                         bench_contexts=args.bench_contexts,
-                            debug=args.debug,
+                        debug=args.debug,
+                        validate_settings=args.validate_settings,
+                        validation_timeout=args.validation_timeout,
                     )
                 total_files_processed += 1
 
@@ -347,7 +364,9 @@ def main() -> int:
                             measure_tps=args.measure_tps,
                             llama_bin=args.llama_bin,
                             bench_contexts=args.bench_contexts,
-                                debug=args.debug,
+                            debug=args.debug,
+                            validate_settings=args.validate_settings,
+                            validation_timeout=args.validation_timeout,
                         )
                         total_files_processed += 1
             else:

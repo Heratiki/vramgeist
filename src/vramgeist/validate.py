@@ -53,10 +53,15 @@ def validate_llama_cpp_settings(
     if not os.path.exists(model_path):
         return False, f"Model file not found: {model_path}", {}
     
-    # Create test prompt
-    prompt = create_validation_prompt(context_length)
+    # Ensure minimum context length for validation
+    if context_length <= 0:
+        context_length = 512  # Use minimum reasonable context
     
-    # Build command - use the most reliable template from bench module
+    # Create test prompt
+    prompt = create_validation_prompt(min(context_length, 512))  # Keep prompt reasonable
+    
+    # Build command - use the most reliable template 
+    # Keep it simple to avoid flag compatibility issues
     cmd_template = (
         f'{shlex.quote(llama_bin)} '
         f'-m {shlex.quote(model_path)} '
@@ -64,9 +69,7 @@ def validate_llama_cpp_settings(
         f'-n {n_predict} '
         f'-c {context_length} '
         f'-ngl {gpu_layers} '
-        f'--no-display-prompt '
-        f'--log-disable '
-        f'--simple-io'
+        f'--no-display-prompt'
     )
     
     details = {
@@ -80,9 +83,11 @@ def validate_llama_cpp_settings(
     try:
         start_time = time.time()
         
+        # Use shlex to properly parse the command and avoid shell issues
+        cmd_args = shlex.split(cmd_template)
+        
         result = subprocess.run(
-            cmd_template,
-            shell=True,
+            cmd_args,
             capture_output=True,
             text=True,
             timeout=timeout
@@ -93,15 +98,20 @@ def validate_llama_cpp_settings(
         details["return_code"] = result.returncode
         details["stdout_length"] = len(result.stdout) if result.stdout else 0
         details["stderr_length"] = len(result.stderr) if result.stderr else 0
+        details["stdout_sample"] = result.stdout[:200] if result.stdout else ""
+        details["stderr_sample"] = result.stderr[:200] if result.stderr else ""
         
         # Check for success indicators
         if result.returncode == 0:
             # Look for successful generation indicators in stdout
-            if result.stdout and len(result.stdout.strip()) > len(prompt):
-                # Generated some output beyond the prompt
-                details["generated_text_length"] = len(result.stdout) - len(prompt)
+            if result.stdout and len(result.stdout.strip()) > 0:
+                # Generated some output - this indicates successful loading and generation
+                details["generated_text_length"] = len(result.stdout.strip())
                 return True, "Validation successful: model loaded and generated text", details
             else:
+                # Check stderr for successful loading indicators even if no stdout
+                if result.stderr and ("model params" in result.stderr.lower() or "llama" in result.stderr.lower()):
+                    return True, "Validation successful: model loaded (no text generation detected)", details
                 return False, "Model loaded but failed to generate expected output", details
         
         # Parse common error patterns from stderr

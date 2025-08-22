@@ -17,7 +17,10 @@
       "Bash(find:*)",
       "Bash(VRAMGEIST_BROWSE_CANCEL=1 uv run vramgeist)",
       "Bash(set VRAMGEIST_BROWSE_CANCEL=1)",
-      "Bash(rm:*)"
+      "Bash(rm:*)",
+      "Bash(uv pip install:*)",
+      "Bash(ls:*)",
+      "Bash(./llama-cli.exe --help)"
     ],
     "deny": []
   }

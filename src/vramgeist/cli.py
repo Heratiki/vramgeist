@@ -224,13 +224,12 @@ def _maybe_env_browse_bypass() -> tuple[int, str | None] | None:
     return None
 
 
-def _run_interactive_tui(args) -> None:
+def _run_interactive_browser() -> None:
     """
-    Run the full interactive TUI with analysis and validation controls.
+    Run the interactive file browser with validation controls.
     """
     try:
-        from .tui.app import run_tui
-        from .tui.options import TUIOptions
+        from .tui.file_browser import browse_files
     except ImportError:
         msg = (
             "Interactive mode requires Textual TUI dependencies.\n"
@@ -240,18 +239,18 @@ def _run_interactive_tui(args) -> None:
         console.print(f"[red]{msg}[/red]")
         sys.exit(2)
 
-    # Create TUI options from CLI args
-    options = TUIOptions(
-        optimize_for=args.optimize_for,
-        debug=args.debug,
-        validate_settings=args.validate_settings,
-        llama_bin=args.llama_bin,
-        validation_timeout=args.validation_timeout,
-    )
+    # Run the file browser with validation enabled
+    # This now handles everything - browsing, analysis, and validation in metadata panel
+    selected = browse_files(start_dir=Path.cwd(), select_files=True, select_dirs=True, enable_validation=True)
     
-    # Run the integrated TUI (no paths = file browser + analysis)
-    exit_code = run_tui(paths=[], options=options)
-    sys.exit(exit_code)
+    if selected is None:
+        # User cancelled
+        sys.exit(130)
+    else:
+        # User selected a file - this shouldn't happen with our integrated approach
+        # but if it does, just print the path
+        print(str(selected), end="")
+        sys.exit(0)
 
 
 def main() -> int:
@@ -265,28 +264,7 @@ def main() -> int:
                 sys.stdout.write(out)
                 sys.stdout.flush()
             sys.exit(code)
-        # Create minimal args object for TUI
-        @dataclass
-        class MinimalArgs:
-            optimize_for: str = "balanced"
-            debug: bool = False
-            validate_settings: bool = False
-            llama_bin: Optional[str] = None
-            validation_timeout: float = 30.0
-        
-        args = MinimalArgs()
-        
-        # Auto-load saved llama.cpp path if available
-        try:
-            from .config_persist import get_llama_bin_path
-            saved_llama_bin = get_llama_bin_path()
-            if saved_llama_bin:
-                args.llama_bin = saved_llama_bin
-                args.validate_settings = True  # Enable validation if we have llama.cpp
-        except ImportError:
-            pass
-            
-        _run_interactive_tui(args)
+        _run_interactive_browser()
         return 0
 
     parser = create_parser()
@@ -349,7 +327,7 @@ def main() -> int:
                 sys.stdout.write(out)
                 sys.stdout.flush()
             sys.exit(code)
-        _run_interactive_tui(args)
+        _run_interactive_browser()
         return 0
 
     # Use Rich terminal UI for normal analysis processing

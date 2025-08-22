@@ -36,7 +36,7 @@ class FileBrowserApp(App):
     }
     """
     
-    def __init__(self, start_dir: Path = None, select_files: bool = True, select_dirs: bool = True):
+    def __init__(self, start_dir: Path = None, select_files: bool = True, select_dirs: bool = True, enable_validation: bool = True):
         super().__init__()
         self.current_dir = (start_dir or Path.cwd()).resolve()
         self.select_files = select_files
@@ -52,9 +52,25 @@ class FileBrowserApp(App):
         self.settings_file = Path.home() / ".vramgeist_settings.json"
         self.show_hidden = self.load_settings().get("show_hidden", False)
         
+        # Validation settings
+        self.enable_validation = enable_validation
+        self.validate_settings = False
+        self.llama_bin = None
+        self.validation_timeout = 30.0
+        
+        # Auto-load validation settings if available
+        if enable_validation:
+            try:
+                from ..config_persist import get_llama_bin_path, get_validation_timeout, should_enable_validation_by_default
+                self.llama_bin = get_llama_bin_path()
+                self.validation_timeout = get_validation_timeout()
+                self.validate_settings = should_enable_validation_by_default()
+            except ImportError:
+                pass
+        
     def compose(self) -> ComposeResult:
         yield Header(name="VRAMGeist File Browser")
-        yield Static("↑↓/jk: navigate | PgUp/PgDn: scroll | Enter: info/navigate | Space/F2: VRAM analysis | ./h: toggle hidden | Esc: hide panel/quit")
+        yield Static("↑↓/jk: navigate | PgUp/PgDn: scroll | Enter: info/navigate | Space/F2: GGUF analysis | v: toggle validation | ./h: toggle hidden | Esc: hide panel/quit")
         self.path_display = Static("")
         yield self.path_display
         
@@ -287,13 +303,34 @@ class FileBrowserApp(App):
         """Process a single GGUF file with full VRAM analysis."""
         try:
             # Import VRAMGeist processing functions
-            from ..ui import analyze_gguf_file
+            from .. import ui as ui_module
+            from ..config import DEFAULT_CONFIG
             
-            self.metadata_display.update("[bold yellow]🔄 Running VRAM Analysis...[/bold yellow]\n\n[dim]This may take a moment...[/dim]")
+            # Show initial analysis message
+            validation_msg = ""
+            if self.validate_settings and self.llama_bin:
+                validation_msg = "\n[dim]⚠️  Validation enabled - this may take longer...[/dim]"
+            
+            self.metadata_display.update(f"[bold yellow]🔄 Running VRAM Analysis...{validation_msg}[/bold yellow]\n\n[dim]This may take a moment...[/dim]")
             self.show_metadata_panel()
             
-            # Analyze the file (function only takes path argument)
-            result = analyze_gguf_file(str(file_path))
+            # Analyze the file with validation settings
+            result = ui_module.analyze_gguf_file_with_config(
+                str(file_path),
+                config=DEFAULT_CONFIG,
+                vram_override=None,
+                ram_override=None,
+                force_detect=False,
+                optimize_for="balanced",
+                gpu_bandwidth_gbps=None,
+                measure_bandwidth=False,
+                measure_tps=False,
+                llama_bin=self.llama_bin if self.validate_settings else None,
+                bench_contexts=None,
+                debug=False,
+                validate_settings=self.validate_settings,
+                validation_timeout=self.validation_timeout,
+            )
             
             # Format the comprehensive results
             lines = []
@@ -443,8 +480,52 @@ class FileBrowserApp(App):
                     lines.append(f"  • {warning}")
                 lines.append("")
             
+            # Validation Results
+            validation = result.get('validation')
+            if validation:
+                lines.append("[bold magenta]🔍 Validation Results:[/bold magenta]")
+                if validation.get('validated'):
+                    lines.append("[green]  🔒 PASSED: Settings validated with llama.cpp[/green]")
+                    lines.append(f"  ✅ Model loaded successfully with {validation.get('tested_gpu_layers', '?')} GPU layers")
+                    lines.append(f"  ✅ Context length {validation.get('tested_context', '?'):,} confirmed working")
+                else:
+                    reason = validation.get('reason', 'Unknown error')
+                    lines.append(f"[red]  ⚠️  FAILED: {reason}[/red]")
+                    
+                    # Show debug information for troubleshooting
+                    details = validation.get('details', {})
+                    if details.get('debug_command'):
+                        lines.append(f"[dim]  Debug - Command: {details['debug_command']}[/dim]")
+                    if details.get('stderr_sample'):
+                        stderr = details['stderr_sample'][:100] + "..." if len(details.get('stderr_sample', '')) > 100 else details.get('stderr_sample', '')
+                        if stderr:
+                            lines.append(f"[dim]  Debug - Error: {stderr}[/dim]")
+                    
+                    # Show fallback recommendations
+                    recommendations = validation.get('recommendations', [])
+                    for rec_text in recommendations:
+                        if 'Fallback validated' in rec_text:
+                            lines.append(f"[yellow]  {rec_text}[/yellow]")
+                        else:
+                            lines.append(f"[dim]  {rec_text}[/dim]")
+                lines.append("")
+            elif self.validate_settings:
+                if self.llama_bin:
+                    lines.append("[bold magenta]🔍 Validation:[/bold magenta]")
+                    lines.append("[yellow]  ⚠️  Validation was requested but not performed[/yellow]")
+                else:
+                    lines.append("[bold magenta]🔍 Validation:[/bold magenta]")
+                    lines.append("[dim]  ❌ Validation unavailable (no llama.cpp binary configured)[/dim]")
+                lines.append("")
+            
             # Add usage tip
-            lines.append("[dim]💡 Tip: Use these values in your AI software's settings[/dim]")
+            validation_tip = ""
+            if validation and validation.get('validated'):
+                validation_tip = " (✅ Validated with llama.cpp)"
+            elif validation and not validation.get('validated'):
+                validation_tip = " (⚠️ Validation failed - consider fallback values)"
+            
+            lines.append(f"[dim]💡 Tip: Use these values in your AI software's settings{validation_tip}[/dim]")
             
             self.metadata_content = "\n".join(lines)
             self.metadata_display.update(self.metadata_content)
@@ -559,6 +640,18 @@ class FileBrowserApp(App):
                 self.selected_index = 0
                 self.refresh_display()
         
+        # Toggle validation: 'v'
+        elif key == "v":
+            if self.enable_validation:
+                self.validate_settings = not self.validate_settings
+                status = "ON" if self.validate_settings else "OFF"
+                if self.llama_bin:
+                    self.path_display.update(f"📂 {self.current_dir} [Validation: {status}]")
+                else:
+                    self.path_display.update(f"📂 {self.current_dir} [Validation: UNAVAILABLE - no llama.cpp path]")
+            else:
+                self.path_display.update(f"📂 {self.current_dir} [Validation: DISABLED]")
+        
         # Toggle hidden files - try multiple key variations
         elif key in ("period", ".", "full_stop", "h"):
             self.show_hidden = not self.show_hidden
@@ -627,7 +720,7 @@ class FileBrowserApp(App):
                 # Check if it's a GGUF file for processing
                 file_path = entry['path']
                 if file_path.suffix.lower() == '.gguf':
-                    # Process GGUF file
+                    # Process GGUF file in metadata panel
                     self.process_gguf_file(file_path)
                 else:
                     # Regular file selection
@@ -644,7 +737,7 @@ class FileBrowserApp(App):
                 self.exit(None)
 
 
-def browse_files(start_dir: Path = None, select_files: bool = True, select_dirs: bool = True) -> Optional[Path]:
+def browse_files(start_dir: Path = None, select_files: bool = True, select_dirs: bool = True, enable_validation: bool = True) -> Optional[Path]:
     """
     Open a Textual-based file browser and return the selected path.
     
@@ -652,9 +745,10 @@ def browse_files(start_dir: Path = None, select_files: bool = True, select_dirs:
         start_dir: Starting directory (defaults to current working directory)
         select_files: Whether files can be selected
         select_dirs: Whether directories can be selected
+        enable_validation: Whether to enable validation features
     
     Returns:
         Selected Path object, or None if cancelled
     """
-    app = FileBrowserApp(start_dir, select_files, select_dirs)
+    app = FileBrowserApp(start_dir, select_files, select_dirs, enable_validation)
     return app.run()

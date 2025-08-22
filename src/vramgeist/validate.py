@@ -15,11 +15,10 @@ import os
 
 def create_validation_prompt(context_length: int) -> str:
     """Create a simple prompt to test the given context length"""
-    # Simple repeated tokens to approximate context length
-    # Each "Hello " is roughly 1-2 tokens, so repeat to get near target length
-    target_words = max(1, context_length // 2)  # Conservative estimate
-    words = ["Hello", "world", "this", "is", "a", "test", "prompt"] * (target_words // 7 + 1)
-    return " ".join(words[:target_words])
+    # Keep the prompt short and simple - we don't need to fill the entire context
+    # Just enough to test that the model loads and can generate with the given context size
+    # llama.cpp will allocate the full context size regardless of prompt length
+    return "Hello! Please generate a short response to test this model configuration."
 
 
 def validate_llama_cpp_settings(
@@ -57,20 +56,30 @@ def validate_llama_cpp_settings(
     if context_length <= 0:
         context_length = 512  # Use minimum reasonable context
     
-    # Create test prompt
-    prompt = create_validation_prompt(min(context_length, 512))  # Keep prompt reasonable
+    # Create test prompt and write to temporary file to avoid command line length issues
+    prompt = create_validation_prompt(context_length)
     
-    # Build command - use the most reliable template 
-    # Keep it simple to avoid flag compatibility issues
-    cmd_template = (
-        f'{shlex.quote(llama_bin)} '
-        f'-m {shlex.quote(model_path)} '
-        f'-p {shlex.quote(prompt)} '
-        f'-n {n_predict} '
-        f'-c {context_length} '
-        f'-ngl {gpu_layers} '
-        f'--no-display-prompt'
-    )
+    # Create temporary file for the prompt
+    prompt_file = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
+            f.write(prompt)
+            prompt_file = f.name
+        
+        # Build command using file input instead of direct prompt
+        # This significantly reduces command line length
+        cmd_template = (
+            f'{shlex.quote(llama_bin)} '
+            f'-m {shlex.quote(model_path)} '
+            f'-f {shlex.quote(prompt_file)} '
+            f'-n {n_predict} '
+            f'-c {context_length} '
+            f'-ngl {gpu_layers} '
+            f'--no-display-prompt'
+        )
+        
+    except Exception as e:
+        return False, f"Validation failed: Could not create temporary prompt file: {str(e)}", {}
     
     details = {
         "command": cmd_template,
@@ -85,6 +94,10 @@ def validate_llama_cpp_settings(
         
         # Use shlex to properly parse the command and avoid shell issues
         cmd_args = shlex.split(cmd_template)
+        
+        # Debug: Log the command being executed
+        details["debug_command"] = cmd_template
+        details["debug_args"] = cmd_args
         
         result = subprocess.run(
             cmd_args,
@@ -145,6 +158,13 @@ def validate_llama_cpp_settings(
     except Exception as e:
         details["exception"] = str(e)
         return False, f"Validation failed: {str(e)}", details
+    finally:
+        # Clean up temporary prompt file
+        if prompt_file and os.path.exists(prompt_file):
+            try:
+                os.unlink(prompt_file)
+            except OSError:
+                pass  # Ignore cleanup errors
 
 
 def create_validation_function(model_path: str, gpu_layers: int, llama_bin: str) -> callable:

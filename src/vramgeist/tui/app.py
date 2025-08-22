@@ -289,8 +289,8 @@ def run_tui(paths: List[Path], options: TUIOptions) -> int:
     if not paths:
         from .file_browser import browse_files
         
-        # Use the Textual file browser to select files/directories
-        selected = browse_files(start_dir=Path.cwd(), select_files=True, select_dirs=True)
+        # Use the Textual file browser to select files/directories with validation enabled
+        selected = browse_files(start_dir=Path.cwd(), select_files=True, select_dirs=True, enable_validation=True)
         
         if selected is None:
             # User cancelled
@@ -315,14 +315,8 @@ def run_tui(paths: List[Path], options: TUIOptions) -> int:
             sys.stderr.flush()
             return 1
 
-    # Proceed with analysis using the TUI
-    # Lazy import of ui for analysis function to avoid early imports
-    from .. import ui as ui_module  # legacy ui remains unchanged
-
-    # Dummy analyze function since we handle analysis in _analyze_one method
-    def dummy_analyze_gguf_file(path: Path) -> Dict[str, Any]:
-        return {}
-
-    controller = VramgeistAppBase(paths=paths, options=options, analyze_fn=dummy_analyze_gguf_file)
-    # Run with asyncio; let textual manage event loop via run_async
-    return asyncio.run(controller.run_async())
+    # Since we integrated validation into FileBrowser, we should never reach this point
+    # The FileBrowser handles everything now
+    import sys
+    sys.stderr.write("Error: This code path should not be reached with FileBrowser integration\n")
+    return 1
